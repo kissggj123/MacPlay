@@ -28,6 +28,9 @@ cp build/combined/macplay-bluetooth native/macplay-bluetooth/macplay-bluetooth
 cp build/combined/livi_crypto.node native/livi-crypto/build/Release/livi_crypto.node
 cp build/combined/gst_video.node native/livi-gst-video/build/Release/gst_video.node
 node node_modules/typescript/bin/tsc -p native/Engine/tsconfig.json
+# Fork: ship the browser client page next to the compiled Engine (webserver.ts
+# resolves it via __dirname at runtime; falls back to an embedded page if absent).
+cp native/Engine/webclient.html build/engine/ 2>/dev/null || true
 export MACPLAY_ARCH="$TARGET_ARCH"
 export MACPLAY_HELPERD_BIN="$PWD/build/combined/livi-helperd"
 APP_ONLY=false
