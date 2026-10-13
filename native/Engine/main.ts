@@ -31,7 +31,12 @@ const armDeadline=()=>{if(!videoReady)videoDeadline.arm()}
 const usb=(usbStatus:string,usbError:string='')=>process.stdout.write(JSON.stringify({usbStatus,usbError})+'\n')
 diagnostic('starting',{wireless:settings.wireless,interface:settings.wifiInterface,channel:settings.channel,width:settings.width,height:settings.height,fps:settings.fps})
 const identity=loadOrCreateIdentity()
-const icons=[256,512].map(size=>({widthPixels:size,heightPixels:size,data:fs.readFileSync(path.join(resources,'icons',`macplay-${size}.png`))}))
+// Fork: no OEM icon on the CarPlay homescreen. Upstream loaded macplay-256/512.png
+// here and declared them via oemIconVisible/oemIcons in iAP2 identification; the
+// icon's only function was opening the MacPlay window from CarPlay, which the
+// browser-client setup doesn't need. To restore: load the PNGs as upstream did.
+const icons:{widthPixels:number;heightPixels:number;data:Buffer}=[]
+// const icons=[256,512].map(size=>({widthPixels:size,heightPixels:size,data:fs.readFileSync(path.join(resources,'icons',`macplay-${size}.png`))}))
 const helperControl=new CpHelperSock()
 const config={deviceName:'MacPlay',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,disableAudioOutput:!settings.audioEnabled,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'MacPlay',icons,rightHandDrive:false}
 const sessions=new Set<CpStack>()
