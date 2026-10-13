@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>MacPlay Web</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden;
+    -webkit-user-select:none;user-select:none;touch-action:none}
+  #v{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;
+    touch-action:none;cursor:pointer}
+  #waiting{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    color:#888;font-family:-apple-system,sans-serif;font-size:15px;text-align:center;
+    padding:24px;line-height:1.6}
+  #hint{position:fixed;left:0;right:0;bottom:0;text-align:center;color:rgba(255,255,255,.35);
+    font-family:-apple-system,sans-serif;font-size:12px;padding:10px;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="waiting">正在等待 CarPlay 视频…<br>请确认 Mac 上的 MacPlay 已连接 iPhone</div>
+<img id="v" alt="" draggable="false">
+<div id="hint">触摸屏幕操作 CarPlay</div>
+<script>
+(function(){
+  var img=document.getElementById('v'),
+      waiting=document.getElementById('waiting'),
+      hint=document.getElementById('hint'),
+      ws=null, wsReady=false,
+      active=new Map(), // pointerId -> {x,y,down,id}
+      imgShown=false;
+
+  // show the <img> once the first frame arrives
+  img.addEventListener('load',function(){
+    if(!imgShown){ imgShown=true; waiting.style.display='none'; }
+  },{once:true});
+  img.src='/mjpeg?'+Date.now();
+
+  // if the stream errors (helper not up yet), retry with backoff
+  var retryMs=2000;
+  img.addEventListener('error',function(){
+    imgShown=false; waiting.style.display='flex';
+    setTimeout(function(){ img.src='/mjpeg?'+Date.now(); },retryMs);
+    retryMs=Math.min(retryMs*1.5,15000);
+  });
+
+  function connect(){
+    var proto=location.protocol==='https:'?'wss':'ws';
+    ws=new WebSocket(proto+'://'+location.host+'/touch');
+    ws.onopen=function(){ wsReady=true; };
+    ws.onclose=function(){ wsReady=false; setTimeout(connect,2000); };
+    ws.onerror=function(){ try{ws.close();}catch(e){} };
+    ws.onmessage=function(ev){
+      // server pongs; nothing to do
+    };
+  }
+  connect();
+  setInterval(function(){
+    if(wsReady) ws.send(JSON.stringify({t:'ping'}));
+  },20000);
+
+  function norm(e){
+    var r=img.getBoundingClientRect();
+    return { x:(e.clientX-r.left)/r.width, y:(e.clientY-r.top)/r.height };
+  }
+  function push(){
+    if(!wsReady) return;
+    var touches=[];
+    active.forEach(function(c){ touches.push(c); });
+    ws.send(JSON.stringify({t:'touch',touches:touches}));
+  }
+  function slot(pid){ return (pid%2+2)%2; } // HID has 2 finger slots
+
+  img.addEventListener('pointerdown',function(e){
+    e.preventDefault();
+    try{ img.setPointerCapture(e.pointerId); }catch(err){}
+    var p=norm(e);
+    active.set(e.pointerId,{x:p.x,y:p.y,down:true,id:slot(e.pointerId)});
+    push();
+  });
+  img.addEventListener('pointermove',function(e){
+    if(!active.has(e.pointerId)) return;
+    e.preventDefault();
+    var p=norm(e);
+    active.set(e.pointerId,{x:p.x,y:p.y,down:true,id:slot(e.pointerId)});
+    push();
+  });
+  function release(e){
+    if(!active.has(e.pointerId)) return;
+    var c=active.get(e.pointerId);
+    // explicit lift-off report so the finger doesn't stick
+    active.delete(e.pointerId);
+    if(wsReady) ws.send(JSON.stringify({t:'touch',touches:[{x:c.x,y:c.y,down:false,id:c.id}]}));
+    push();
+  }
+  img.addEventListener('pointerup',release);
+  img.addEventListener('pointercancel',release);
+  img.addEventListener('contextmenu',function(e){ e.preventDefault(); });
+
+  // hide the hint after first interaction
+  img.addEventListener('pointerdown',function(){
+    hint.style.display='none';
+  },{once:true});
+})();
+</script>
+</body>
+</html>
