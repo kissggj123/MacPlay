@@ -6,6 +6,8 @@ use gstreamer_app as gst_app;
 use gstreamer_base as gst_base;
 use std::sync::Once;
 
+mod webtap;
+
 static INIT: Once = Once::new();
 
 /// Initialises GStreamer once, and turns on the debug categories named in
@@ -293,6 +295,9 @@ impl Player {
         }
         log_bus_messages(&player.pipeline);
         player.attach_view(handle);
+        // Fork: start the optional MJPEG web tap. No-op unless MACPLAY_WEB_PORT
+        // is set (see webtap.rs).
+        webtap::maybe_start(&player.pipeline);
 
         Some(player)
     }
@@ -315,21 +320,47 @@ impl Player {
             if livi_video_codec::is_hw_decoder(decoder) { "hw" } else { "sw" }
         );
 
-        match gst::parse::launch(&desc) {
-            Ok(p) => p.downcast::<gst::Pipeline>().ok(),
-            Err(e) if with_cal => {
-                eprintln!("[gst_video] calibration pass failed ({e}), retrying without it");
-                let plain = describe(false);
-                gst::parse::launch(&plain)
-                    .inspect_err(|e| eprintln!("[gst_video] pipeline parse FAILED: {e}"))
-                    .ok()?
-                    .downcast::<gst::Pipeline>()
-                    .ok()
+        // Fork: never let the web-tap branch kill the local window. If the web
+        // description fails to parse (e.g. jpegenc missing from the bundled
+        // GStreamer), retry once with the tap disabled, then fall through to
+        // the original calibration fallback.
+        let web_enabled = webtap::web_port().is_some();
+        let try_launch = |d: &str| -> Option<gst::Pipeline> {
+            match gst::parse::launch(d) {
+                Ok(p) => p.downcast::<gst::Pipeline>().ok(),
+                Err(e) => {
+                    eprintln!("[gst_video] pipeline parse FAILED: {e}");
+                    None
+                }
             }
-            Err(e) => {
-                eprintln!("[gst_video] pipeline parse FAILED: {e}");
-                None
+        };
+        if let Some(p) = try_launch(&desc) {
+            return Some(p);
+        }
+        if web_enabled {
+            eprintln!("[gst_video] web-tap pipeline failed, retrying without it");
+            // pipeline_desc keys the tee branch off this env var; drop it for
+            // the retry, then restore.
+            let saved = std::env::var_os("MACPLAY_WEB_PORT");
+            std::env::remove_var("MACPLAY_WEB_PORT");
+            let plain = describe(with_cal);
+            if let Some(v) = saved {
+                std::env::set_var("MACPLAY_WEB_PORT", v);
             }
+            if let Some(p) = try_launch(&plain) {
+                return Some(p);
+            }
+        }
+        if with_cal {
+            eprintln!("[gst_video] retrying without the calibration pass");
+            let plain = describe(false);
+            gst::parse::launch(&plain)
+                .inspect_err(|e| eprintln!("[gst_video] pipeline parse FAILED: {e}"))
+                .ok()?
+                .downcast::<gst::Pipeline>()
+                .ok()
+        } else {
+            None
         }
     }
 
