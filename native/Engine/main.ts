@@ -13,6 +13,7 @@ import { displayConfig } from './display'
 import { FrameRateFallback, VideoWaitDeadline } from './frameRateFallback'
 import { acceptsPhone } from './phoneSelection'
 import { audioLevel, disconnectedAfterSession } from './runtimeControls'
+import { startWebServer } from './webserver'
 
 const resources=process.env.MACPLAY_RESOURCES!
 const settings=JSON.parse(fs.readFileSync(process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'settings.json'),'utf8'))
@@ -51,7 +52,7 @@ const authDir=path.join(dataDir,'authentication')
 if (!fs.existsSync(path.join(authDir,'identity.pk8')) || !fs.existsSync(path.join(authDir,'certificate.p7b'))) {
  log('缺少认证文件','请在关于页面打开认证目录，放入有使用权限的配套文件。');process.exit(2)
 }
-const helper=spawn(path.join(resources,'driver/livi-helperd'),[],{env:{...process.env,MACPLAY_AUTH_DIR:authDir,MACPLAY_WIFI_SSID:settings.ssid||'',MACPLAY_EXTERNAL_DISCOVERY:settings.wireless?'1':'0',LIVI_CP_NAME:'MacPlay',MACPLAY_SERIAL:'MACPLAY-'+identity.pairingId.toUpperCase(),LIVI_CP_DEVICE_ID:config.deviceId,LIVI_CP_AP_MAC:settings.wireless ? settings.accessPointMAC||'' : '',LIVI_CP_BT_MAC:config.btMac,LIVI_CP_PK:identity.pkHex,LIVI_CP_PI:identity.pairingId,LIVI_CP_AIRPLAY_PORT:'17000',LIVI_CP_WIRELESS:settings.wireless?'1':'0',LIVI_WIFI_IFACE:settings.wifiInterface||'en0',MACPLAY_TARGET_BT:settings.targetBluetooth||'',MACPLAY_TARGET_USB:settings.targetUSB||'',LIVI_PASSPHRASE:settings.password||'',LIVI_CHANNEL:String(settings.channel||36)},stdio:['ignore','pipe','pipe']})
+const helper=spawn(path.join(resources,'driver/livi-helperd'),[],{env:{...process.env,MACPLAY_AUTH_DIR:authDir,MACPLAY_WIFI_SSID:settings.ssid||'',MACPLAY_EXTERNAL_DISCOVERY:settings.wireless?'1':'0',LIVI_CP_NAME:'MacPlay',MACPLAY_SERIAL:'MACPLAY-'+identity.pairingId.toUpperCase(),LIVI_CP_DEVICE_ID:config.deviceId,LIVI_CP_AP_MAC:settings.wireless ? settings.accessPointMAC||'' : '',LIVI_CP_BT_MAC:config.btMac,LIVI_CP_PK:identity.pkHex,LIVI_CP_PI:identity.pairingId,LIVI_CP_AIRPLAY_PORT:'17000',LIVI_CP_WIRELESS:settings.wireless?'1':'0',LIVI_WIFI_IFACE:settings.wifiInterface||'en0',MACPLAY_TARGET_BT:settings.targetBluetooth||'',MACPLAY_TARGET_USB:settings.targetUSB||'',LIVI_PASSPHRASE:settings.password||'',LIVI_CHANNEL:String(settings.channel||36),MACPLAY_WEB_PORT:process.env.MACPLAY_WEB_PORT||'18081'},stdio:['ignore','pipe','pipe']})
 for(const stream of [helper.stdout,helper.stderr]) readline.createInterface({input:stream!}).on('line',line=>{
  console.error(line)
  if(!videoReady && line.includes('Bluetooth SDP timed out')) log('蓝牙握手未完成','请在iPhone蓝牙页面与Mac完成配对，并确认两端配对码。')
@@ -88,6 +89,16 @@ server.on('error',e=>{log('接收服务启动失败',e.message);shutdown()})
 server.listen({port:17000,host:'::',ipv6Only:false},()=>{
  if(settings.wireless)discovery=new Discovery(settings.wifiInterface||'en0',{deviceId:config.deviceId,pk:identity.pkHex,pi:identity.pairingId,btMac:config.btMac},settings.targetBluetooth||'',()=>handoffStarted&&!networkConnected&&!stopping,s=>diagnostic('network-discovery',s))
  log('等待iPhone连接',settings.wireless?'无线CarPlay接收已启用，请在系统蓝牙中配对iPhone':'有线CarPlay接收已启用，请连接USB数据线')
+})
+// Fork: browser re-stream for the car head-unit browser over LAN.
+// Serves the touch-enabled MJPEG client on 0.0.0.0:<httpPort> and proxies
+// video from the Rust helper's web tap (127.0.0.1:<mjpegPort>).
+// Env overrides: MACPLAY_WEB_HTTP_PORT (default 8080), MACPLAY_WEB_PORT (default 18081).
+startWebServer({
+  httpPort:Number(process.env.MACPLAY_WEB_HTTP_PORT||'8080'),
+  mjpegPort:Number(process.env.MACPLAY_WEB_PORT||'18081'),
+  getStack:()=>active,
+  isVideoReady:()=>videoReady,
 })
 let mediaTicks=0,lastCounts=[0,0]
 const mediaStats=setInterval(()=>{
