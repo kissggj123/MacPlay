@@ -130,18 +130,40 @@ pub fn calibration() -> &'static str {
 /// decoder keeps every frame for the decoder's reference chain, the one behind
 /// it drops when the sink falls behind.
 pub fn pipeline_desc(codec: &str, decoder: &str, cal: &str, sink_override: Option<&str>) -> String {
+    // Fork addition (web streaming): when MACPLAY_WEB_PORT is set, split the
+    // decoded stream with a tee. Branch one keeps the original local sink
+    // chain untouched; branch two downscales and JPEG-encodes into an appsink
+    // named `websink`, consumed by player/src/webtap.rs which serves MJPEG.
+    // Unset (default): byte-identical pipeline to upstream.
+    let tail = if std::env::var_os("MACPLAY_WEB_PORT").is_some() {
+        format!(
+            "{decoder} name=dec ! tee name=t \
+             t. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! {presink}{cal}{sink} \
+             t. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! videoconvert ! videoscale ! video/x-raw,width=960 \
+             ! jpegenc quality=60 ! appsink name=websink emit-signals=false \
+             max-buffers=2 drop=true sync=false",
+            presink = presink(decoder),
+            sink = sink_chain(sink_override),
+        )
+    } else {
+        format!(
+            "{decoder} name=dec \
+             ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! {presink}{cal}{sink}",
+            presink = presink(decoder),
+            sink = sink_chain(sink_override),
+        )
+    };
     format!(
         "appsrc name=src is-live=true do-timestamp=true format=time \
          min-latency=0 max-latency=0 caps={caps} \
          ! {parser} \
          ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=2000000000 \
-         ! {decoder} name=dec \
-         ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream \
-         ! {presink}{cal}{sink}",
+         ! {tail}",
         caps = caps_for(codec).to_str().unwrap_or(""),
         parser = parser_for(codec).to_str().unwrap_or(""),
-        presink = presink(decoder),
-        sink = sink_chain(sink_override),
     )
 }
 
