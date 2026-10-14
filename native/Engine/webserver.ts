@@ -162,6 +162,17 @@ function handleTouchMessage(raw: string, opts: WebServerOpts): void {
     handleRtcSignaling(msg, opts)
     return
   }
+  // Fork: PlayPort-style keyframe request from browser.
+  // The browser asks for a keyframe when its decoder is stalled.
+  if (msg && msg.t === 'keyframe') {
+    const stack = opts.getStack()
+    if (stack && typeof (stack as any).requestKeyframe === 'function') {
+      try { (stack as any).requestKeyframe() } catch { /* ignore */ }
+    } else {
+      console.error('[webserver] keyframe requested but CpStack has no requestKeyframe()')
+    }
+    return
+  }
   const stack = opts.getStack()
   if (!stack) return
   if (msg && msg.t === 'touch' && Array.isArray(msg.touches)) {
