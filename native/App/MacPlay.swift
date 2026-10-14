@@ -843,6 +843,37 @@ struct PlaySettings: Codable {
     }
 }
 
+struct LogConsoleView: View {
+    @ObservedObject var model: PlayModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(L("实时日志")).font(.headline)
+                Spacer()
+                Button(L("清空")) { model.logs = "" }
+                Button(L("导出")) { NSWorkspace.shared.open(model.logURL) }
+            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(model.logs.isEmpty ? L("暂无日志") : model.logs)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id("logBottom")
+                }
+                .frame(height: 200)
+                .background(Color.black.opacity(0.05))
+                .cornerRadius(8)
+                .onChange(of: model.logs) { _, _ in
+                    withAnimation { proxy.scrollTo("logBottom", anchor: .bottom) }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+}
+
 enum Page: String,CaseIterable,Identifiable {
     case connection="连接",about="关于"
     var id:String{rawValue}
@@ -852,6 +883,7 @@ enum Page: String,CaseIterable,Identifiable {
 struct SettingsView: View {
     @ObservedObject var model:PlayModel
     @StateObject private var updates=MacPlayUpdates()
+    @State private var showLogConsole = false
     var body:some View {
         NavigationSplitView {
             List(Page.allCases,selection:$model.page){ item in Label(item.rawValue,systemImage:item.icon).tag(item) }
@@ -960,10 +992,11 @@ struct SettingsView: View {
                     }
                 }.formStyle(.grouped)
                 if model.page != .about {
+                if showLogConsole { LogConsoleView(model: model) }
                 Divider()
                 HStack {
                     if model.receivingOrWaiting {Button(L("停止接收")){model.stop()}}
-                    if model.running {Button(L("查看日志")){NSWorkspace.shared.open(model.logURL)}}
+                    if model.running {Button(L(showLogConsole ? "隐藏日志" : "日志控制台")){showLogConsole.toggle()}}
                     Spacer()
                     Button(L(model.running ? "应用并重新连接" : "启动接收")){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
