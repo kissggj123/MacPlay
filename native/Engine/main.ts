@@ -95,7 +95,7 @@ const server=net.createServer(socket=>{
  }
  stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
  stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
- stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled!==false)
+ stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled!==false&&browserClientCount()>0)
  stack.on('session-active',()=>{sessionReady=true;frameRateGuard.negotiationStarted();armDeadline();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);if(!videoReady)log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流');syncSleepAssertion()})
  stack.on('disconnect-reason',(reason:string)=>{disconnectReason=reason})
  stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;syncSleepAssertion();log(disconnectReason,'重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
@@ -127,7 +127,7 @@ process.env.MACPLAY_MIC_PORT ||= '18084'
 // Fork: MJPEG via GStreamer internal stream (websink).
 // The pipeline taps decoded frames directly (MACPLAY_WEB_PORT mode),
 // no external screencapture needed.
-startWebServer({
+const webServer=startWebServer({
   httpPort:Number(process.env.MACPLAY_WEB_HTTP_PORT||'8080'),
   httpsPort:Number(process.env.MACPLAY_WEB_HTTPS_PORT||'8443'),
   mjpegPort:Number(process.env.MACPLAY_WEB_PORT||'18081'),
@@ -137,12 +137,17 @@ startWebServer({
   certDir:path.join(dataDir,'certs'),
   getStack:()=>active,
   isVideoReady:()=>videoReady,
-  // Fork: audio/mic follow the display. The car browser is the audience while
-  // it holds a /touch socket; the Mac output resumes when the last one leaves.
-  onBrowserClients:(connected)=>{ try { addon.setLocalAudioMuted(connected) } catch(e){ console.error('[audio-route]',e) } },
+  // Fork: the browser device IS the audio output — the Mac never plays
+  // locally. The audio session tracks /touch clients: no browser anywhere =
+  // no audio route for the iPhone = playback pauses (like a disconnected
+  // Bluetooth headphone); whichever device opens a browser gets the sound.
+  onBrowserClients:(connected)=>{
+    for(const stack of sessions){try{stack.setAudioActive(connected)}catch(e){console.error('[audio-route]',e)}}
+  },
   // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
   // No getScreenFrame = use internal pipeline, not external screencapture.
 })
+const browserClientCount=():number=>{try{return (webServer as unknown as {browserClientCount?:()=>number}).browserClientCount?.()??0}catch{return 0}}
 // Fork: optional no-sleep while CarPlay is connected
 // (settings: preventSleepWhenConnected, toggled in the app's settings UI).
 // Holds a `caffeinate -s` assertion: PreventSystemSleep, which also covers
@@ -236,7 +241,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
    settings.volume=audioLevel(update.volume,settings.volume??1)
    settings.callVolume=audioLevel(update.callVolume,settings.callVolume??1)
    settings.audioEnabled=!!update.enabled
-   for(const stack of sessions){stack.setStreamVolume(3,settings.volume,0);stack.setStreamVolume(2,settings.callVolume,0);stack.setAudioActive(settings.audioEnabled!==false)}
+   for(const stack of sessions){stack.setStreamVolume(3,settings.volume,0);stack.setStreamVolume(2,settings.callVolume,0);stack.setAudioActive(settings.audioEnabled&&browserClientCount()>0)}
   }
  } catch {}
  if(line.startsWith('media ')){const index=Number(line.slice(6));if(Number.isInteger(index)&&index>=1&&index<=5)active?.sendMedia(index)}

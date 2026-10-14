@@ -245,14 +245,6 @@ pub fn close_audio(stream: External<AudioStream>) {
     stream.0.player.stop()
 }
 
-/// Fork: audio follows the display. `true` mutes the Mac speakers while a car
-/// browser client is connected (the browser tap keeps playing either way);
-/// `false` returns audio to the Mac when no browser is watching.
-#[napi]
-pub fn set_local_audio_muted(muted: bool) {
-    feed::set_all_local_volumes(if muted { 0.0 } else { 1.0 });
-}
-
 /// Binds a port for the phone's CarPlay screen stream and feeds the decrypted frames into the
 /// plane. `on_config` reports the stream's codec and configuration record.
 #[napi]

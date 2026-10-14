@@ -70,18 +70,6 @@ fn sink_chain(cfg: &Config) -> String {
     }
 }
 
-/// Fork: persisted browser-first mute state. Applied to players created later
-/// (a CarPlay session may start while a browser client is already connected).
-static LOCAL_MUTED: AtomicBool = AtomicBool::new(false);
-
-pub fn local_muted() -> bool {
-    LOCAL_MUTED.load(Ordering::Relaxed)
-}
-
-pub fn store_local_muted(muted: bool) {
-    LOCAL_MUTED.store(muted, Ordering::Relaxed);
-}
-
 /// The whole pipeline for `cfg`. The caps go onto the appsrc afterwards, so the
 /// RFC 3640 fields keep their string types.
 ///
@@ -95,19 +83,14 @@ pub fn pipeline_desc(cfg: &Config) -> String {
         None => String::new(),
     };
     let tail = if std::env::var_os("MACPLAY_WEB_PORT").is_some() {
-        // Fork: dual output. The web tap always feeds the car browser; the
-        // local sink survives behind a `localvol` mute so the Mac plays only
-        // while no browser client is connected (browser-first routing, the
-        // level is flipped from JS via set_local_audio_muted).
-        format!(
-            "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-             ! tee name=at \
-             at. ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream \
-             ! appsink name=webaudio emit-signals=false max-buffers=8 drop=true sync=false \
-             at. ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream \
-             ! volume name=localvol volume=0.0 ! {sink}",
-            sink = sink_chain(cfg),
-        )
+        // Fork: the Mac is a relay, never an output — audio goes ONLY to the
+        // browser device. With no browser client the JS side tears the audio
+        // session down (setAudioActive(false)) so the iPhone pauses, exactly
+        // like a disconnected Bluetooth headphone.
+        "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+         ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream \
+         ! appsink name=webaudio emit-signals=false max-buffers=8 drop=true sync=false"
+            .to_owned()
     } else {
         format!(
             "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 ! \
@@ -143,8 +126,6 @@ pub struct Player {
     payload_type: u8,
     /// Fork (web audio): tap id in webaudio.rs, if the web tap is active.
     webaudio_id: Option<u32>,
-    /// Fork: local-output mute element (`localvol`), present only in web mode.
-    local_volume: Option<gst::Element>,
 }
 
 impl Player {
@@ -254,13 +235,6 @@ impl Player {
         // No-op unless MACPLAY_WEB_PORT is set (see webaudio.rs).
         // audioType 3 (realtime=false) is the buffered media stream.
         let webaudio_id = webaudio::maybe_register(&pipeline, !cfg.realtime);
-        let local_volume = pipeline.by_name("localvol");
-        // Inherit the browser-first mute state: a CarPlay session can start
-        // while a browser client is already connected (or after it left).
-        if let Some(v) = &local_volume {
-            let start = if local_muted() { 0.0 } else { 1.0 };
-            v.set_property("volume", start);
-        }
         Some(Self {
             decoded,errors,
             pipeline,
@@ -272,16 +246,7 @@ impl Player {
             codec: cfg.codec,
             payload_type: cfg.payload_type,
             webaudio_id,
-            local_volume,
         })
-    }
-
-    /// Fork: 0 mutes the Mac speakers (browser is the audience), anything else
-    /// lets the CarPlay audio out locally. No-op outside web mode.
-    pub fn set_local_volume(&self, level: f64) {
-        if let Some(v) = &self.local_volume {
-            v.set_property("volume", level.clamp(0.0, 10.0));
-        }
     }
 
     pub fn statistics(&self) -> (u64,u64) {(self.decoded.load(Ordering::Relaxed),self.errors.load(Ordering::Relaxed))}

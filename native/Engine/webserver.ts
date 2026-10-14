@@ -628,5 +628,9 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       `[webserver] car browser (HTTP) -> http://<mac-lan-ip>:${opts.httpPort}/`,
     )
   })
+  // Fork: let the host check how many browser clients are attached (used to
+  // decide the audio session's initial state: no browser = paused).
+  ;(server as unknown as { browserClientCount: () => number }).browserClientCount =
+    () => wsClients.size
   return server
 }
