@@ -470,6 +470,18 @@ export class CpStack extends EventEmitter {
       if (type === STREAM_TYPE_MAIN_SCREEN) {
         session.screen?.stop()
         session.screen = null
+        // Fork: the in-process receiver (macOS addon path) must be released and
+        // re-armed too. The CarPlay status-bar fullscreen toggle re-SETUPs the
+        // screen stream; leaving the receiver open and codecEmitted=true meant
+        // the re-SETUP never re-emitted video-codec and the link stalled (卡死).
+        if (session.screenNativeId != null) {
+          if (session.screenInProcess) closeScreenReceiver(session.screenNativeId)
+          else gstHost.closeVideoReceiver(session.screenNativeId)
+          session.screenNativeId = null
+        }
+        session.screenInProcess = false
+        session.codecEmitted = false
+        session.mainStreamReady = false
         continue
       }
       const idx = session.audioMeta.findIndex((m) => m.type === type)
