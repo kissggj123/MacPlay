@@ -168,25 +168,74 @@
     return 'avc1.'+hx(sps[1])+hx(sps[2])+hx(sps[3]);
   }
 
-  function configureDecoder(sps, pps){
-    var codec=codecStringFromSps(sps);
+  function configureDecoder(cfg){
+    // Fork: cfg={vps,sps,pps} for HEVC, {sps,pps} for H.264
+    var codec, desc;
+    if(cfg.vps){
+      // HEVC: build hvcC from VPS/SPS/PPS, codec string hvc1
+      codec='hvc1.1.6.L93.B0'; // Main profile, level 3.1 (adjust as needed)
+      desc=buildHvcC(cfg.vps,cfg.sps,cfg.pps);
+    }else{
+      codec=codecStringFromSps(cfg.sps);
+      desc=buildAvcC(cfg.sps,cfg.pps);
+    }
     try{
-      videoDecoder.configure({ codec:codec, description:buildAvcC(sps,pps), optimizeForLatency:true });
+      videoDecoder.configure({ codec:codec, description:desc, optimizeForLatency:true });
       decoderConfigured=true;
     }catch(e){ decoderConfigured=false; }
   }
 
-  function decodeNalUnit(nal, timestamp){
+  function buildHvcC(vps, sps, pps){
+    // Minimal hvcC: [1][profile...][arrays]
+    // For WebCodecs, we can use a simplified version
+    var vlen=vps.length, slen=sps.length, plen=pps.length;
+    var len=23+3+2+vlen+3+2+slen+3+2+plen;
+    var out=new Uint8Array(len), o=0;
+    out[o++]=1; // configurationVersion
+    // general_profile_space(0)+tier(0)+profile_idc(1=Main)
+    out[o++]=1; out[o++]=0x60; out[o++]=0; out[o++]=0; out[o++]=0; // compat flags
+    for(var i=0;i<6;i++) out[o++]=0; // constraint flags
+    out[o++]=93; // level_idc (3.1)
+    out[o++]=0xF0; out[o++]=0; // min_spatial_segmentation
+    out[o++]=0xFC; // parallelismType
+    out[o++]=0xFC; // chromaFormat
+    out[o++]=0xF8; // bitDepthLuma
+    out[o++]=0xF8; // bitDepthChroma
+    out[o++]=0; out[o++]=0; // avgFrameRate
+    out[o++]=0x03; // constFramerate/numLayers/nested/lengthSize
+    out[o++]=3; // numOfArrays
+    // VPS array (type 32)
+    out[o++]=0xA0; out[o++]=0; out[o++]=1;
+    out[o++]=(vlen>>8)&0xFF; out[o++]=vlen&0xFF; out.set(vps,o); o+=vlen;
+    // SPS array (type 33)
+    out[o++]=0xA1; out[o++]=0; out[o++]=1;
+    out[o++]=(slen>>8)&0xFF; out[o++]=slen&0xFF; out.set(sps,o); o+=slen;
+    // PPS array (type 34)
+    out[o++]=0xA2; out[o++]=0; out[o++]=1;
+    out[o++]=(plen>>8)&0xFF; out[o++]=plen&0xFF; out.set(pps,o);
+    return out;
+  }
+
+  function decodeNalUnit(nal, timestamp, codec){
     if(!decoderConfigured) return;
-    var type=nal[0]&0x1F;
-    if(type===7||type===8) return;
+    var type, isKey;
+    if(codec==='h265'){
+      type=(nal.length>=2)?((nal[0]>>1)&0x3F):-1;
+      if(type===32||type===33||type===34) return; // skip VPS/SPS/PPS
+      // HEVC keyframes: IDR_W_RADL=19, IDR_N_LP=20
+      isKey=(type===19||type===20);
+    }else{
+      type=nal[0]&0x1F;
+      if(type===7||type===8) return; // skip SPS/PPS
+      isKey=(type===5);
+    }
     var chunk=new Uint8Array(4+nal.length);
     chunk[0]=(nal.length>>>24)&0xFF; chunk[1]=(nal.length>>>16)&0xFF;
     chunk[2]=(nal.length>>>8)&0xFF; chunk[3]=nal.length&0xFF;
     chunk.set(nal,4);
     try{
       videoDecoder.decode(new EncodedVideoChunk({
-        type:(type===5)?'key':'delta', timestamp:timestamp, data:chunk }));
+        type:isKey?'key':'delta', timestamp:timestamp, data:chunk }));
     }catch(e){}
   }
 
@@ -212,26 +261,54 @@
     h264ws=new WebSocket(proto+'://'+location.host+'/h264');
     h264ws.binaryType='arraybuffer';
     var ts=0;
+    var videoCodec='h264'; // set from server's first text message
     h264ws.onmessage=function(ev){
+      // Fork: first message is JSON with codec info
+      if(typeof ev.data==='string'){
+        try{
+          var msg=JSON.parse(ev.data);
+          if(msg.codec) videoCodec=msg.codec;
+        }catch(e){}
+        return;
+      }
       var data=new Uint8Array(ev.data); bytesCount+=data.length;
       var units=parseNalUnits(data);
       // Fork: debug - show received NAL stats on waiting overlay
       var w=document.getElementById('waiting');
       for(var i=0;i<units.length;i++){
-        var nal=units[i], type=nal[0]&0x1F;
-        if(type===7){ spsPps=spsPps||{}; spsPps.sps=nal; }
-        else if(type===8){ spsPps=spsPps||{}; spsPps.pps=nal; }
-        if(!decoderConfigured&&spsPps&&spsPps.sps&&spsPps.pps) {
-          try { configureDecoder(spsPps.sps,spsPps.pps); }
+        var nal=units[i], type;
+        if(videoCodec==='h265'){
+          // HEVC: 2-byte header, type=(b0>>1)&0x3F. VPS=32,SPS=33,PPS=34
+          type=(nal.length>=2)?((nal[0]>>1)&0x3F):-1;
+        }else{
+          // H.264: 1-byte header, type=b0&0x1F. SPS=7,PPS=8
+          type=nal[0]&0x1F;
+        }
+        if(videoCodec==='h265'){
+          if(type===32){ spsPps=spsPps||{}; spsPps.vps=nal; }
+          else if(type===33){ spsPps=spsPps||{}; spsPps.sps=nal; }
+          else if(type===34){ spsPps=spsPps||{}; spsPps.pps=nal; }
+        }else{
+          if(type===7){ spsPps=spsPps||{}; spsPps.sps=nal; }
+          else if(type===8){ spsPps=spsPps||{}; spsPps.pps=nal; }
+        }
+        var hasConfig = videoCodec==='h265' ?
+          (spsPps&&spsPps.vps&&spsPps.sps&&spsPps.pps) :
+          (spsPps&&spsPps.sps&&spsPps.pps);
+        if(!decoderConfigured&&hasConfig) {
+          try { configureDecoder(spsPps); }
           catch(cfgErr){ if(w) w.innerHTML='配置解码器失败: '+cfgErr.message; }
         }
         if(w && !imgShown) {
-          w.innerHTML='收到 NAL: type='+type+' ('+units.length+'个/包)<br>'+
-            'SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗')+
+          var cfgStr = videoCodec==='h265' ?
+            'VPS:'+(spsPps&&spsPps.vps?'✓':'✗')+' SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗') :
+            'SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗');
+          w.innerHTML='['+videoCodec+'] 收到 NAL: type='+type+' ('+units.length+'个/包)<br>'+
+            cfgStr+
             '<br>解码器:'+(decoderConfigured?'已配置':'未配置')+
             '<br>已解码帧:'+frameCount;
         }
-        decodeNalUnit(nal,ts);
+        decodeNalUnit(nal,ts,videoCodec);
       }
       ts+=33333; updateHud('WebCodecs H.264');
     };

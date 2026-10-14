@@ -48,9 +48,10 @@ impl ScreenSink for Sink {
             return;
         }
         self.reported = Some((codec, atom.to_vec()));
-        // Fork: cache SPS/PPS for direct H.264 forwarding (no GStreamer)
-        if matches!(codec, CpCodec::H264) {
-            crate::h264direct::set_codec_data(atom);
+        // Fork: cache VPS/SPS/PPS for direct video forwarding (no GStreamer)
+        match codec {
+            CpCodec::H264 => crate::h264direct::set_codec_data(atom, false),
+            CpCodec::H265 => crate::h264direct::set_codec_data(atom, true),
         }
         (self.on_config)(codec, atom.to_vec());
     }

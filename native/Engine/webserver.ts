@@ -234,22 +234,49 @@ export function startWebServer(opts: WebServerOpts): http.Server {
   // TCP relay from the Rust h264 tap (h264tap.rs): length-prefixed Annex B
   // NAL units -> WebSocket binary on /h264 -> browser VideoDecoder.
   const h264Clients = new Set<net.Socket>()
-  // Fork: cache SPS/PPS to send to new browser clients (they connect after
+  // Fork: video codec in use (0=H.264, 1=H.265), set from Rust forwarder
+  let videoCodec: 'h264' | 'h265' = 'h264'
+  let codecReceived = false
+  // Fork: cache VPS/SPS/PPS to send to new browser clients (they connect after
   // the Rust forwarder already sent config to Node)
+  let cachedVps: Buffer | null = null
   let cachedSps: Buffer | null = null
   let cachedPps: Buffer | null = null
+  function getNalType(nal: Buffer): number {
+    if (nal.length <= 4) return -1
+    let off = 0
+    if (nal[0] === 0 && nal[1] === 0) {
+      off = (nal[2] === 1) ? 3 : (nal[2] === 0 && nal[3] === 1 ? 4 : 0)
+    }
+    if (off === 0 || off >= nal.length) return -1
+    if (videoCodec === 'h265') {
+      // HEVC: 2-byte header, type = (byte0 >> 1) & 0x3F
+      if (off + 1 >= nal.length) return -1
+      return (nal[off] >> 1) & 0x3F
+    } else {
+      // H.264: 1-byte header, type = byte0 & 0x1F
+      return nal[off] & 0x1F
+    }
+  }
   function broadcastH264(nal: Buffer): void {
-    // Detect SPS (type 7) / PPS (type 8) from Annex B NAL
-    if (nal.length > 4) {
-      let off = 0
-      if (nal[0] === 0 && nal[1] === 0) {
-        off = (nal[2] === 1) ? 3 : (nal[2] === 0 && nal[3] === 1 ? 4 : 0)
+    // First message from Rust is 1-byte codec identifier
+    if (!codecReceived) {
+      if (nal.length === 1) {
+        videoCodec = nal[0] === 1 ? 'h265' : 'h264'
+        codecReceived = true
+        console.error(`[webserver] video codec: ${videoCodec}`)
       }
-      if (off > 0 && off < nal.length) {
-        const type = nal[off] & 0x1F
-        if (type === 7) cachedSps = nal
-        else if (type === 8) cachedPps = nal
-      }
+      return
+    }
+    // Detect VPS (32) / SPS (33,7) / PPS (34,8) from Annex B NAL
+    const type = getNalType(nal)
+    if (videoCodec === 'h265') {
+      if (type === 32) cachedVps = nal
+      else if (type === 33) cachedSps = nal
+      else if (type === 34) cachedPps = nal
+    } else {
+      if (type === 7) cachedSps = nal
+      else if (type === 8) cachedPps = nal
     }
     for (const sock of h264Clients) {
       if ((sock as any).destroyed) { h264Clients.delete(sock); continue }
@@ -257,6 +284,14 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     }
   }
   function sendCachedConfig(sock: net.Socket): void {
+    // Send codec as text message first, then config NALs
+    try {
+      const msg = JSON.stringify({ codec: videoCodec })
+      const msgBuf = Buffer.from(msg, 'utf8')
+      const header = Buffer.from([0x81, msgBuf.length])
+      sock.write(Buffer.concat([header, msgBuf]))
+    } catch { /* ignore */ }
+    if (cachedVps) wsSendBinary(sock, cachedVps)
     if (cachedSps) wsSendBinary(sock, cachedSps)
     if (cachedPps) wsSendBinary(sock, cachedPps)
   }
