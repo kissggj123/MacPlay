@@ -178,13 +178,15 @@ const webServer=startWebServer({
   // Fork: display switching only works on wireless (wired sessions veto it).
   displaySwitchable:()=>!!settings.wireless,
   onBrowserClients:(connected)=>{
-    // Fork: pause/resume ONLY via CarPlay media HID keys. setAudioActive(false)
-    // made the phone tear the whole audio stream down (TEARDOWN type 100) and
-    // the receiver cannot ask the phone to rebuild it — audio stayed dead after
-    // any browser dropout. HID pause just stops packets; the stream survives.
-    // Media key: 1=Play 0xB0, 2=Pause 0xB1. Leaving always pauses; on attach
-    // we only auto-resume when the user hasn't opted to respect a manual
-    // pause (设置：打开浏览器时自动恢复播放).
+    // Fork: setAudioActive is the LOCAL forwarding gate (appsink on/off), pure
+    // local state with no protocol side effects. The session starts with the
+    // gate closed (no browser yet); without reopening it here every packet stays
+    // gated (forwarded:0) and the browser never gets audio. The TEARDOWN seen
+    // on pause is the phone's own behavior, not caused by this gate.
+    for(const stack of sessions){try{stack.setAudioActive(connected)}catch(e){console.error('[audio-route]',e)}}
+    // Pause/resume via CarPlay media HID keys: 1=Play 0xB0, 2=Pause 0xB1.
+    // Leaving always pauses; on attach we only auto-resume when the user
+    // hasn't opted to respect a manual pause (设置：打开浏览器时自动恢复播放).
     try{
       if(!connected)active?.sendMedia(2)
       else if(settings.autoResumeOnBrowser!==false)active?.sendMedia(1)
