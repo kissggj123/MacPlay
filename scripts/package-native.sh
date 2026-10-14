@@ -119,5 +119,5 @@ if [[ "${1:-}" != "--app-only" ]]; then
  rm -rf build/dmg/NIO.app
  ditto "$APP" build/dmg/NIO.app
 
- hdiutil create -ov -volname "NIO Play" -srcfolder build/dmg -format UDZO "dist/NIO-Play-1.2.2-${TARGET_ARCH}.dmg"
+ hdiutil create -ov -volname "NIO Play" -srcfolder build/dmg -format UDZO "dist/NIOPlay-1.2.2-${TARGET_ARCH}.dmg"
 fi
