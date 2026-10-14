@@ -115,6 +115,17 @@
 
   /* ============ video (WebCodecs H.264 passthrough) ============ */
   var useWebCodecs = window.isSecureContext && ('VideoDecoder' in window);
+  // Fork (screen capture): if the server is in screencap mode, force MJPEG
+  // even in a secure context (there's no H.264 stream to decode).
+  try {
+    var healthXhr = new XMLHttpRequest();
+    healthXhr.open('GET', '/health', false); // synchronous, runs once at load
+    healthXhr.send();
+    if (healthXhr.status === 200) {
+      var health = JSON.parse(healthXhr.responseText);
+      if (health.mode === 'screencap') useWebCodecs = false;
+    }
+  } catch (e) { /* ignore, fall back to default */ }
   var canvas=document.getElementById('c'), ctx2d=null;
   var h264ws=null, videoDecoder=null, decoderConfigured=false;
   var spsPps=null, frameCount=0, bytesCount=0, lastStatTime=Date.now();
