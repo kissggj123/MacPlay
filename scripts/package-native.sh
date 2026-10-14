@@ -97,6 +97,15 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSMicrophoneUsageDescription</key><string>MacPlay使用麦克风进行Siri语音控制和通话。</string>
 </dict></plist>
 PLIST
+# Rewrite absolute Homebrew dylib references (from build-time linking) to
+# @rpath so the addon loads the BUNDLED GStreamer at runtime. The bundle
+# carries the patched low-latency applemedia plugin; the Homebrew copy does
+# not, and its registry scan also stalls gst::init for seconds.
+for addon in "$RES/engine/node_modules/"*/build/Release/*.node; do
+  while IFS= read -r dep; do
+    install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$addon"
+  done < <(otool -L "$addon" | awk 'NR>1{print $1}' | grep -E '^/opt/homebrew|^/usr/local/opt|^/usr/local/lib' || true)
+done
 ADDON="$RES/engine/node_modules/livi-gst-video/build/Release/gst_video.node"
 while IFS= read -r rp; do install_name_tool -delete_rpath "$rp" "$ADDON" 2>/dev/null || true; done < <(otool -l "$ADDON" | awk '/LC_RPATH/{getline;getline;print $2}')
 install_name_tool -add_rpath '@loader_path/../../../../../gstreamer/macos-x64/lib' "$ADDON"

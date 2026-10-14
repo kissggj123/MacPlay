@@ -12,36 +12,21 @@ if (!fs.existsSync(gst)) {
     gst = path.join(root, 'gstreamer/macos')
   }
 }
-// Determine if the addon was compiled against Homebrew GStreamer
-let isHomebrewBuild = false
-let homebrewPrefix = ''
-const addonNodePaths = [
-  path.resolve(__dirname, 'node_modules/livi-gst-video/build/Release/gst_video.node'),
-  path.resolve(__dirname, '../node_modules/livi-gst-video/build/Release/gst_video.node'),
-  path.resolve(__dirname, '../../native/livi-gst-video/build/Release/gst_video.node'),
-]
-for (const p of addonNodePaths) {
-  if (fs.existsSync(p)) {
-    try {
-      const addonBuf = fs.readFileSync(p)
-      if (addonBuf.includes(Buffer.from('/opt/homebrew'))) {
-        isHomebrewBuild = true
-        homebrewPrefix = '/opt/homebrew'
-        break
-      } else if (addonBuf.includes(Buffer.from('/usr/local/opt/gstreamer')) || addonBuf.includes(Buffer.from('/usr/local/lib/libgstreamer'))) {
-        isHomebrewBuild = true
-        homebrewPrefix = '/usr/local'
-        break
-      }
-    } catch (_) {}
-  }
-}
-
+// GStreamer environment: prefer the BUNDLED runtime whenever it exists — it
+// carries the patched low-latency applemedia/vtdec plugin the Homebrew copy
+// lacks. The addon binary may contain '/opt/homebrew' strings from build-time
+// linking; that says nothing about which runtime to use here. Scanning the
+// Homebrew plugin dir (~200 plugins) can stall gst::init long enough for the
+// iPhone to give up on the video stream, so only fall back to it (dev runs
+// without a bundle) when the bundle is missing.
 const bundledPluginDir = path.join(gst, 'lib/gstreamer-1.0')
 const bundledScanner = path.join(gst, 'libexec/gstreamer-1.0/gst-plugin-scanner')
 const bundledGstLib = path.join(gst, 'lib')
+const bundledHasPlugins = (() => {
+  try { return fs.existsSync(bundledPluginDir) && fs.readdirSync(bundledPluginDir).length > 0 } catch { return false }
+})()
 
-if (!isHomebrewBuild && fs.existsSync(bundledPluginDir) && fs.readdirSync(bundledPluginDir).length > 0) {
+if (bundledHasPlugins) {
   process.env.GST_PLUGIN_SYSTEM_PATH = ''
   process.env.GST_PLUGIN_PATH = bundledPluginDir
   if (fs.existsSync(bundledScanner)) {
@@ -54,10 +39,9 @@ if (!isHomebrewBuild && fs.existsSync(bundledPluginDir) && fs.readdirSync(bundle
     }
   }
 } else {
-  // Homebrew build or bundled plugins missing: use Homebrew or system plugins
-  const brewPrefixes = homebrewPrefix ? [homebrewPrefix] : ['/opt/homebrew', '/usr/local']
+  // Dev run without a bundled runtime: use Homebrew or system GStreamer.
   let found = false
-  for (const prefix of brewPrefixes) {
+  for (const prefix of ['/opt/homebrew', '/usr/local']) {
     const brewPluginDir = path.join(prefix, 'lib/gstreamer-1.0')
     const brewScanner = path.join(prefix, 'libexec/gstreamer-1.0/gst-plugin-scanner')
     if (fs.existsSync(brewPluginDir)) {

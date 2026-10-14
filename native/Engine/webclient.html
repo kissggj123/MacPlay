@@ -421,6 +421,218 @@
     h264ws.binaryType='arraybuffer';
     h264ws.onmessage=function(ev){
       // Fork: first message is JSON with codec info
+      if(typeof ev.data==='string'){
+        try{
+          var msg=JSON.parse(ev.data);
+          if(msg.codec&&msg.codec!==videoCodec){
+            videoCodec=msg.codec;
+            // a different stream needs a fresh decoder
+            spsPps=null; decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+            try{ videoDecoder.close(); }catch(e){}
+            makeDecoder();
+          }
+        }catch(e){}
+        return;
+      }
+      var data=new Uint8Array(ev.data); bytesCount+=data.length;
+      var units=parseNalUnits(data);
+      for(var i=0;i<units.length;i++) feedNal(units[i]);
+      // a stalled partial access unit is flushed by age
+      if(auBuf.length&&Date.now()-auPendingSince>150) flushAu();
+      var hasConfig = videoCodec==='h265' ?
+        (spsPps&&spsPps.vps&&spsPps.sps&&spsPps.pps) :
+        (spsPps&&spsPps.sps&&spsPps.pps);
+      if(!decoderConfigured&&hasConfig){
+        try { configureDecoder(spsPps); }
+        catch(cfgErr){
+          var we=document.getElementById('waiting');
+          if(we) we.innerHTML='配置解码器失败: '+cfgErr.message;
+        }
+      }
+      // Fork: debug - show received NAL stats on waiting overlay
+      var w=document.getElementById('waiting');
+      if(w&&!imgShown){
+        var cfgStr = videoCodec==='h265' ?
+          'VPS:'+(spsPps&&spsPps.vps?'✓':'✗')+' SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗') :
+          'SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗');
+        w.innerHTML='['+videoCodec+'] 收到 NAL: '+units.length+'个/包<br>'+
+          cfgStr+
+          '<br>解码器:'+(decoderConfigured?'已配置':'未配置')+
+          '<br>已解码帧:'+frameCount;
+      }
+      updateHud('WebCodecs '+(videoCodec==='h265'?'H.265':'H.264'));
+    };
+    h264ws.onclose=function(){ setTimeout(startWebCodecs,2000); };
+    h264ws.onerror=function(){ try{h264ws.close();}catch(e){} };
+  }
+
+  function startMjpeg(){
+    img.style.display='block'; canvas.style.display='none';
+    img.src='/mjpeg?'+Date.now();
+    img.addEventListener('error',function(){
+      imgShown=false; waiting.style.display='flex';
+      setTimeout(function(){ img.src='/mjpeg?'+Date.now(); },2000);
+    });
+    img.addEventListener('load',function(){ frameCount++; });
+    setInterval(function(){ updateHud('MJPEG'); },1000);
+  }
+
+  if (useWebCodecs) {
+    startWebCodecs();
+  } else {
+    if (!window.isSecureContext) {
+      var httpsPort = (typeof health !== 'undefined' && health && health.httpsPort) || 8443;
+      var httpsUrl = 'https://' + location.hostname + ':' + httpsPort + location.pathname + location.search;
+      var isZeroTranscode = typeof health !== 'undefined' && health && health.mode === 'zero-transcode';
+      if (waiting) {
+        waiting.innerHTML = '<div style="background:rgba(20,20,20,0.92);border:1px solid #3b82f6;border-radius:12px;padding:22px;max-width:440px;margin:auto;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,0.5);">' +
+          '<div style="font-size:20px;font-weight:bold;color:#60a5fa;margin-bottom:10px;">🔒 需使用 HTTPS 访问</div>' +
+          '<div style="font-size:14px;color:#eee;line-height:1.6;margin-bottom:16px;">' +
+          '当前使用的是 <b>HTTP</b> 协议，浏览器安全规范禁止启用 <b>WebCodecs</b> 硬件解码。<br>' +
+          (isZeroTranscode ? '<span style="color:#f59e0b;font-weight:bold;">当前处于零转码极速模式，必须使用 HTTPS。</span><br>' : '') +
+          '</div>' +
+          '<a href="' + httpsUrl + '" style="display:inline-block;background:#2563eb;color:#fff;padding:10px 24px;border-radius:8px;font-size:15px;text-decoration:none;font-weight:bold;cursor:pointer;">' +
+          '👉 点击切换至 HTTPS 模式 (' + httpsPort + '端口)' +
+          '</a>' +
+          '<div style="font-size:12px;color:#aaa;margin-top:12px;line-height:1.4;">' +
+          '首次访问如提示证书风险，点击“高级”或“详细信息”选择“继续访问”即可。' +
+          '</div>' +
+          '</div>';
+      }
+    }
+    if (typeof health === 'undefined' || !health || health.mode !== 'zero-transcode') {
+      startMjpeg();
+    }
+  }
+
+  /* ============ audio mixer (per-stream GainNodes) ============ */
+  var audioCtx=null, audioRunning=false;
+  var masterGain=null, streamGains={}; // streamId -> GainNode
+  var volLevels={master:1, media:1, nav:1, call:1};
+  // stream id mapping: wheelplay protocol bit0=media; we classify:
+  // stream 0/1 = media, 2 = nav, 3+ = call/siri (best effort)
+  function streamKind(id){ return id<=1?'media':(id===2?'nav':'call'); }
+
+  function ensureAudio(){
+    if(!audioCtx){
+      try{
+        audioCtx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
+        masterGain=audioCtx.createGain(); masterGain.connect(audioCtx.destination);
+      }catch(e){ return; }
+    }
+    var p=audioCtx.resume();
+    if(p&&p.then) p.then(function(){ audioRunning=audioCtx.state==='running'; });
+    else audioRunning=audioCtx.state==='running';
+  }
+  function gainFor(stream){
+    var g=streamGains[stream];
+    if(!g){ g=audioCtx.createGain(); g.connect(masterGain); streamGains[stream]=g; }
+    g.gain.value=volLevels[streamKind(stream)]||1;
+    return g;
+  }
+  function applyVolumes(){
+    if(masterGain) masterGain.gain.value=volLevels.master;
+    Object.keys(streamGains).forEach(function(s){ gainFor(+s); });
+  }
+  ['master','media','nav','call'].forEach(function(k){
+    var el=document.getElementById('vol-'+k), v=document.getElementById('vol-'+k+'-v');
+    el.addEventListener('input',function(){
+      volLevels[k]=el.value/100; v.textContent=el.value; applyVolumes();
+      try{ localStorage.setItem('macplay-vol-'+k, el.value); }catch(e){}
+    });
+    try{ var sv=localStorage.getItem('macplay-vol-'+k); if(sv!==null){ el.value=sv; v.textContent=sv; volLevels[k]=sv/100; } }catch(e){}
+  });
+
+  function decodeAudioPacket(buffer){
+    if(!(buffer instanceof ArrayBuffer)||buffer.byteLength<22) return null;
+    var h=new DataView(buffer);
+    if(h.getUint32(0,true)!==0x31415057) return null;
+    var stream=h.getInt32(4,true), rate=h.getUint32(8,true), channels=h.getUint16(12,true);
+    if(rate<8000||rate>96000||channels<1||channels>2||(buffer.byteLength-20)%(channels*2)) return null;
+    return { stream:stream, rate:rate, channels:channels,
+      media:!!(h.getUint16(14,true)&1), sequence:h.getUint32(16,true),
+      pcm:new Int16Array(buffer,20) };
+  }
+  var audioStreams=new Map(), audioNodes=new Set();
+  function playAudioPacket(buffer){
+    if(muted||!audioRunning) return;
+    var frame=decodeAudioPacket(buffer); if(!frame) return;
+    var now=audioCtx.currentTime;
+    var delay=frame.media?0.3:0.06, maxAhead=frame.media?delay+1:0.25;
+    var next=audioStreams.get(frame.stream);
+    if(next===undefined) next=now+delay;
+    if(next<now){
+      audioNodes.forEach(function(n){ if(n._stream===frame.stream){ try{n.stop();}catch(e){} } });
+      next=now+delay;
+    }
+    if(next-now>maxAhead||audioNodes.size>=256) return;
+    var count=frame.pcm.length/frame.channels;
+    var ab=audioCtx.createBuffer(frame.channels,count,frame.rate);
+    for(var ch=0;ch<frame.channels;ch++){
+      var out=ab.getChannelData(ch);
+      for(var i=0;i<count;i++) out[i]=frame.pcm[i*frame.channels+ch]/32768;
+    }
+    var node=audioCtx.createBufferSource();
+    node.buffer=ab; node._stream=frame.stream;
+    node.connect(gainFor(frame.stream)); audioNodes.add(node);
+    node.onended=function(){ audioNodes.delete(node); node.disconnect(); };
+    node.start(next);
+    audioStreams.set(frame.stream,next+count/frame.rate);
+  }
+  mutebtn.addEventListener('click',function(e){
+    e.stopPropagation(); muted=!muted; mutebtn.textContent=muted?'🔇':'🔊';
+  });
+  document.addEventListener('pointerdown',ensureAudio,{capture:true});
+
+  /* ============ microphone uplink (browser mic -> iPhone) ============ */
+  var micStream=null, micProc=null, micOn=false;
+  var micbtn=document.getElementById('micbtn');
+  micbtn.addEventListener('click',function(e){
+    e.stopPropagation();
+    if(micOn){ stopMic(); } else { startMic(); }
+  });
+  function startMic(){
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ alert('浏览器不支持麦克风'); return; }
+    ensureAudio();
+    navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,sampleRate:16000}})
+    .then(function(stream){
+      micStream=stream;
+      var src=audioCtx.createMediaStreamSource(stream);
+      micProc=audioCtx.createScriptProcessor(4096,1,1);
+      micProc.onaudioprocess=function(ev){
+        if(!micOn||!wsReady) return;
+        var inp=ev.inputBuffer.getChannelData(0);
+        var pcm=new Int16Array(inp.length);
+        for(var i=0;i<inp.length;i++) pcm[i]=Math.max(-32768,Math.min(32767,Math.round(inp[i]*32768)));
+        // wheelplay mic frame: magic + stream(-1=mic) + rate + ch + flags + seq + pcm
+        var hdr=new DataView(new ArrayBuffer(20));
+        hdr.setUint32(0,0x31415057,true); hdr.setInt32(4,-1,true);
+        hdr.setUint32(8,16000,true); hdr.setUint16(12,1,true);
+        hdr.setUint16(14,0,true); hdr.setUint32(16,0,true);
+        var out=new Uint8Array(20+pcm.length*2);
+        out.set(new Uint8Array(hdr.buffer),0); out.set(new Uint8Array(pcm.buffer),20);
+        ws.send(out.buffer);
+      };
+      src.connect(micProc); micProc.connect(audioCtx.destination);
+      micOn=true; micbtn.textContent='🎤 麦克风开'; micbtn.classList.add('on');
+    }).catch(function(){ alert('麦克风权限被拒绝'); });
+  }
+  function stopMic(){
+    micOn=false; micbtn.textContent='🎤 启用麦克风'; micbtn.classList.remove('on');
+    if(micProc){ try{micProc.disconnect();}catch(e){} micProc=null; }
+    if(micStream){ micStream.getTracks().forEach(function(t){t.stop();}); micStream=null; }
+  }
+
+  /* ============ websocket ============ */
+  function send(obj){ if(wsReady) ws.send(JSON.stringify(obj)); }
+  function connect(){
+    var proto=location.protocol==='https:'?'wss':'ws';
+    ws=new WebSocket(proto+'://'+location.host+'/touch');
+    ws.binaryType='arraybuffer';
+    ws.onopen=function(){ wsReady=true; };
+    ws.onclose=function(){ wsReady=false; setTimeout(connect,2000); };
+    ws.onerror=function(){ try{ws.close();}catch(e){} };
+    ws.onmessage=function(ev){
       if(typeof ev.data!=='string') playAudioPacket(ev.data);
     };
   }
