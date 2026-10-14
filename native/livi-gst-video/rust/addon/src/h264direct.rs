@@ -32,10 +32,24 @@ impl Forwarder {
         if self.clients.is_empty() || nal.is_empty() {
             return;
         }
-        let len = (nal.len() as u32).to_be_bytes();
+        // Fork: ensure Annex B start code (0x00 0x00 0x00 0x01) prefix.
+        // The NAL from the iPhone may not have it; browsers need it.
+        const START_CODE: [u8; 4] = [0, 0, 0, 1];
+        let has_start_code = nal.len() >= 4
+            && ((nal[0] == 0 && nal[1] == 0 && nal[2] == 0 && nal[3] == 1)
+                || (nal[0] == 0 && nal[1] == 0 && nal[2] == 1));
+        let payload: Vec<u8> = if has_start_code {
+            nal.to_vec()
+        } else {
+            let mut v = Vec::with_capacity(4 + nal.len());
+            v.extend_from_slice(&START_CODE);
+            v.extend_from_slice(nal);
+            v
+        };
+        let len = (payload.len() as u32).to_be_bytes();
         let mut dead = Vec::new();
         for (i, client) in self.clients.iter_mut().enumerate() {
-            let ok = client.write_all(&len).is_ok() && client.write_all(nal).is_ok();
+            let ok = client.write_all(&len).is_ok() && client.write_all(&payload).is_ok();
             if !ok {
                 dead.push(i);
             }
