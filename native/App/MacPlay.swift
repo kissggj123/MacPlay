@@ -101,6 +101,7 @@ struct PlaySettings: Codable {
     var preventSleepWhenConnected: Bool? = nil
     var headless: Bool? = nil
     var zeroTranscode: Bool? = nil
+    var screenCapture: Bool? = nil
     var displayID: UInt32? = nil
     var inputDevice: String? = nil
     var outputDevice: String? = nil
@@ -949,6 +950,8 @@ struct SettingsView: View {
                             Text(L("画面仅通过浏览器串流，适合车机使用。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
                             Toggle(L("零转码模式（M1 最佳性能，需 WebCodecs 浏览器）"),isOn:Binding(get:{model.settings.zeroTranscode ?? false},set:{model.settings.zeroTranscode=$0;model.persistPreferences()}))
                             Text(L("跳过 Mac 端视频解码，H.264 直接转发给浏览器硬解。需配合无头模式 + Chrome/Edge 类浏览器（HTTPS）。不支持 WebCodecs 时无画面。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
+                            Toggle(L("截屏模式（兼容性最好，延迟较高）"),isOn:Binding(get:{model.settings.screenCapture ?? false},set:{model.settings.screenCapture=$0;model.persistPreferences()}))
+                            Text(L("截取 Mac 上的 CarPlay 窗口，以 MJPEG 发到浏览器。兼容所有浏览器，延迟约 200-500ms，帧率约 10fps。不能与无头模式/零转码同时用（需要 Mac 显示窗口）。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
                             Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要MacPlay保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
                         }
                         Section(L("车机浏览器")) {
