@@ -156,6 +156,17 @@ struct MacPlayAboutView: View {
             Link(L("项目主页"), destination: URL(string: "https://github.com/kissggj123/MacPlay-CarBrowser")!)
             Text(L("将 Mac 变成 CarPlay 接收器，串流到车机浏览器显示和操作")).font(.callout).foregroundStyle(.secondary)
         }
+        Section(L("车机浏览器功能")) {
+            Text(L("• 无头模式：画面仅通过浏览器串流")).font(.callout)
+            Text(L("• 零转码模式：M1 零 CPU 占用，H.264 直通")).font(.callout)
+            Text(L("• WebCodecs 硬解 / MJPEG 自动回退")).font(.callout)
+            Text(L("• 分流音频混音器 / 浏览器麦克风回传")).font(.callout)
+            Text(L("• Focus 模式 / 显示设置 / 安全边距")).font(.callout)
+            Text(L("在车机浏览器打开 http://<Mac-IP>:8080")).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+        }
+        Section(L("致谢")) {
+            Text(L("基于 Roylyl/MacPlay，移植 youcci/playport 功能，借鉴 fython/wheelplay 设计")).font(.callout).foregroundStyle(.secondary)
+        }
         Section(L("软件更新")) {
             Toggle(L("自动检查更新"), isOn: Binding(get: { updates.automatic }, set: { updates.setAutomatic($0) }))
             HStack { Button(L(updates.checking ? "正在检查更新…" : "检查更新")) { updates.check() }.disabled(updates.checking); Button(L("查看发行说明")) { updates.openRelease() } }
