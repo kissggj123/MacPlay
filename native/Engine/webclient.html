@@ -225,6 +225,12 @@
   async function configureDecoder(cfg){
     // Fork: cfg={vps,sps,pps} for HEVC, {sps,pps} for H.264
     // PlayPort-style: probe HEVC, use raw config as description
+    // Debounce: the phone repeats in-band parameter sets; reconfiguring on each
+    // one flushed the decoder AND spammed a keyframe request per repeat, which
+    // fed the forceKeyFrame storm that stalled sessions.
+    var cfgKey=(cfg.vps?'H':'A')+':'+(cfg.vps?cfg.vps.length:0)+':'+cfg.sps.length+':'+cfg.pps.length;
+    if(decoderConfigured && cfgKey===lastConfiguredKey) return;
+    lastConfiguredKey=cfgKey;
     if(cfg.vps){
       var hvcC=buildHvcC(cfg.vps,cfg.sps,cfg.pps);
       var best=await probeHevcCodec(hvcC);
@@ -260,8 +266,11 @@
   }
 
   // Fork: PlayPort-style keyframe watchdog.
-  // If no frames decoded in 2.5s, request keyframe from iPhone.
-  var keyframeWatchdog=null, framesDecodedSinceConfig=0;
+  // If no frames decoded within the backoff window, request a keyframe from the
+  // iPhone. The interval backs off (2.5s → 10s cap) so a phone that legitimately
+  // stopped sending frames (paused music, static map) cannot be flooded with
+  // forceKeyFrame commands — that storm stalled entire sessions.
+  var keyframeWatchdog=null, framesDecodedSinceConfig=0, keyframeBackoffMs=2500, lastConfiguredKey=null;
   function armKeyframeWatchdog(){
     clearKeyframeWatchdog();
     framesDecodedSinceConfig=0;
@@ -269,15 +278,16 @@
       if(framesDecodedSinceConfig===0 && decoderConfigured){
         // Request keyframe via WebSocket
         if(wsReady) send({t:'keyframe'});
-        armKeyframeWatchdog(); // Re-arm
+        keyframeBackoffMs=Math.min(keyframeBackoffMs*2,10000);
+        armKeyframeWatchdog(); // Re-arm with the longer interval
       }
-    }, 2500);
+    }, keyframeBackoffMs);
   }
   function clearKeyframeWatchdog(){
     if(keyframeWatchdog){ clearTimeout(keyframeWatchdog); keyframeWatchdog=null; }
   }
   // Call this when a frame is successfully decoded
-  function onFrameDecoded(){ framesDecodedSinceConfig++; }
+  function onFrameDecoded(){ framesDecodedSinceConfig++; keyframeBackoffMs=2500; }
 
   function buildHvcC(vps, sps, pps){
     // hvcC record assembled from the stream's parameter sets. The general

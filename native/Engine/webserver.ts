@@ -153,12 +153,19 @@ class WsParser {
   }
 }
 
+let lastKeyframeAt = 0
+
 function handleTouchMessage(raw: string, opts: WebServerOpts): void {
   let msg: any
   try { msg = JSON.parse(raw) } catch { return }
   // Fork: PlayPort-style keyframe request from browser.
   // The browser asks for a keyframe when its decoder is stalled.
+  // Throttled server-side: a stalled/looping client must not flood the phone's
+  // control channel with forceKeyFrame commands (that stalled sessions).
   if (msg && msg.t === 'keyframe') {
+    const now = Date.now()
+    if (now - lastKeyframeAt < 800) return
+    lastKeyframeAt = now
     const stack = opts.getStack()
     if (stack && typeof (stack as any).forceMainKeyframe === 'function') {
       try { (stack as any).forceMainKeyframe() } catch { /* ignore */ }

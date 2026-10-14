@@ -38,9 +38,12 @@ const identity=loadOrCreateIdentity()
 const icons:{widthPixels:number;heightPixels:number;data:Buffer}[]=[256,512].map(size=>({widthPixels:size,heightPixels:size,data:fs.readFileSync(path.join(resources,'icons',`nio-${size}.png`))}))
 const helperControl=new CpHelperSock()
 const config={deviceName:'NIO Play',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:settings.webCodec?settings.webCodec!=='h264':true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,
- // Fork: audio defaults ON in this fork — the browser streaming mode is the
- // point, and the local/web routing is handled dynamically (setLocalAudioMuted).
- disableAudioOutput:settings.audioEnabled===false,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'NIO Play',icons,rightHandDrive:false}
+ // Fork: audio ALWAYS advertised to the iPhone — the browser streaming mode is
+ // the point, and where the sound plays is handled downstream (browser PCM or a
+ // media-key pause when no browser is attached). With disableAudioOutput=true
+ // the /info response omits audioFormats, the phone never opens an audio
+ // stream (audioPackets stayed 0) and keeps playing on its own speaker.
+ disableAudioOutput:false,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'NIO Play',icons,rightHandDrive:false}
 const sessions=new Set<CpStack>()
 let active: CpStack|undefined
 let wiredReady=false
