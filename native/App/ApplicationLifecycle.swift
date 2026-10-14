@@ -45,10 +45,10 @@ import Combine
         if model.settings.backgroundEnabled == true {
             if statusItem == nil {
                 statusItem=NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
-                let image=NSImage(systemSymbolName:"car.fill",accessibilityDescription:"MacPlay")
+                let image=NSImage(systemSymbolName:"car.fill",accessibilityDescription:"NIO Play")
                 image?.isTemplate=true
                 statusItem?.button?.image=image
-                statusItem?.button?.toolTip="MacPlay"
+                statusItem?.button?.toolTip="NIO Play"
             }
         } else if let item=statusItem {
             NSStatusBar.system.removeStatusItem(item);statusItem=nil
@@ -63,12 +63,12 @@ import Combine
             let item=NSMenuItem(title:L(title),action:action,keyEquivalent:"")
             item.target=self;item.isEnabled=enabled;menu.addItem(item)
         }
-        item("显示MacPlay",#selector(showMain))
+        item("显示NIO Play",#selector(showMain))
         item("显示CarPlay",#selector(showCarPlay),enabled:model?.running == true)
         menu.addItem(.separator())
         item(model?.receivingOrWaiting == true ? "停止接收" : "启动接收",#selector(toggleReceiver))
         menu.addItem(.separator())
-        item("退出MacPlay",#selector(quit))
+        item("退出NIO Play",#selector(quit))
         return menu
     }
 

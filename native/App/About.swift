@@ -28,7 +28,7 @@ struct GitHubRelease: Decodable {
         let asset = images.first { item in architecture.contains { item.name.lowercased().contains($0) } }
             ?? images.first { $0.name.lowercased().contains("universal") }
         guard let asset, let url = URL(string: asset.browser_download_url), url.scheme == "https",
-              url.host == "github.com", url.path.hasPrefix("/kissggj123/MacPlay-CarBrowser/releases/download/") else { return nil }
+              url.host == "github.com", url.path.hasPrefix("/kissggj123/NIOPlay/releases/download/") else { return nil }
         return url
     }
 }
@@ -85,7 +85,7 @@ struct GitHubRelease: Decodable {
         Task {
             defer { checking = false }
             do {
-                var request = URLRequest(url: URL(string: "https://api.github.com/repos/kissggj123/MacPlay-CarBrowser/releases?per_page=100")!)
+                var request = URLRequest(url: URL(string: "https://api.github.com/repos/kissggj123/NIOPlay/releases?per_page=100")!)
                 request.timeoutInterval = 15
                 request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
                 request.setValue("MacPlay/\(currentVersion)", forHTTPHeaderField: "User-Agent")
@@ -119,7 +119,7 @@ struct GitHubRelease: Decodable {
         dismissPrompt()
     }
     func openRelease() {
-        if let url = URL(string: release?.html_url ?? "https://github.com/Roylyl/MacPlay/releases"), url.scheme == "https", url.host == "github.com" { NSWorkspace.shared.open(url) }
+        if let url = URL(string: release?.html_url ?? "https://github.com/kissggj123/NIOPlay/releases"), url.scheme == "https", url.host == "github.com" { NSWorkspace.shared.open(url) }
     }
     func exportLogs(_ model: PlayModel) {
         exportDetail = ""
@@ -149,11 +149,11 @@ struct MacPlayAboutView: View {
     @ObservedObject var updates: MacPlayUpdates
     var body: some View {
         Section(L("关于")) {
-            LabeledContent("MacPlay-CarBrowser", value: updates.currentVersion)
+            LabeledContent("NIO Play", value: updates.currentVersion)
             LabeledContent(L("构建版本"), value: updates.build)
             LabeledContent(L("运行架构"), value: updates.architecture)
             LabeledContent(L("开源许可"), value: "GPL-3.0-or-later")
-            Link(L("项目主页"), destination: URL(string: "https://github.com/kissggj123/MacPlay-CarBrowser")!)
+            Link(L("项目主页"), destination: URL(string: "https://github.com/kissggj123/NIOPlay")!)
             Text(L("将 Mac 变成 CarPlay 接收器，串流到车机浏览器显示和操作")).font(.callout).foregroundStyle(.secondary)
         }
         Section(L("车机浏览器功能")) {

@@ -520,7 +520,7 @@ struct PlaySettings: Codable {
                 locationManager.requestLocation()
             }
         case .denied, .restricted:
-            networkStatus="定位权限未允许。请在“隐私与安全性→定位服务”中允许MacPlay后重试。"
+            networkStatus="定位权限未允许。请在“隐私与安全性→定位服务”中允许NIO Play后重试。"
         default:
             networkStatus="已获定位权限，但系统未返回Wi-Fi名称。请确认Mac已连接Wi-Fi后重试。"
         }
@@ -532,7 +532,7 @@ struct PlaySettings: Codable {
     func readSavedNetworkPassword() {
         guard !readingPassword else { return }
         if currentNetworkIsEnterprise {
-            passwordStatus="当前网络使用802.1X企业认证（用户名/密码或证书）。MacPlay的无线握手不支持发送这类凭据，请改用个人Wi-Fi、热点或USB连接。"
+            passwordStatus="当前网络使用802.1X企业认证（用户名/密码或证书）。NIO Play的无线握手不支持发送这类凭据，请改用个人Wi-Fi、热点或USB连接。"
             return
         }
         let ssid=settings.ssid
@@ -926,7 +926,7 @@ struct SettingsView: View {
     var body:some View {
         NavigationSplitView {
             List(Page.allCases,selection:$model.page){ item in Label(item.rawValue,systemImage:item.icon).tag(item) }
-                .navigationTitle("MacPlay").navigationSplitViewColumnWidth(min:150,ideal:165,max:200)
+                .navigationTitle("NIO Play").navigationSplitViewColumnWidth(min:150,ideal:165,max:200)
         } detail: {
             VStack(spacing:0) {
                 Form {
@@ -964,7 +964,7 @@ struct SettingsView: View {
                             Text(L("跳过 Mac 端视频解码，H.264 直接转发给浏览器硬解。需配合无头模式 + Chrome/Edge 类浏览器（HTTPS）。不支持 WebCodecs 时无画面。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
                             Toggle(L("截屏模式（兼容性最好，延迟较高）"),isOn:Binding(get:{model.settings.screenCapture ?? false},set:{model.settings.screenCapture=$0;model.persistPreferences()}))
                             Text(L("截取 Mac 上的 CarPlay 窗口，以 MJPEG 发到浏览器。兼容所有浏览器，延迟约 200-500ms，帧率约 10fps。不能与无头模式/零转码同时用（需要 Mac 显示窗口）。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
-                            Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要MacPlay保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
+                            Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要NIO Play保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
                         }
                         Section(L("车机浏览器")) {
                             Toggle(L("打开浏览器时自动恢复播放"),isOn:Binding(get:{model.settings.autoResumeOnBrowser ?? true},set:{model.settings.autoResumeOnBrowser=$0;model.persistPreferences()}))
@@ -1018,7 +1018,7 @@ struct SettingsView: View {
                                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Firewall")!)
                                 }
                             }
-                            Text(L("局域网需放行：TCP 8080（浏览器画面/触控/音频）。iPhone 直连 CarPlay 使用系统 usbmuxd/蓝牙/Wi-Fi，走 MacPlay 自身通道。")).font(.callout).foregroundStyle(.secondary)
+                            Text(L("局域网需放行：TCP 8080（浏览器画面/触控/音频）。iPhone 直连 CarPlay 使用系统 usbmuxd/蓝牙/Wi-Fi，走 NIO Play 自身通道。")).font(.callout).foregroundStyle(.secondary)
                         }.onAppear { model.refreshLanInfo() }
                         if !model.settings.wireless {Section(L("USB直连")) {
                             LabeledContent(L("设备"),value:L(model.usbStatus))
@@ -1075,7 +1075,7 @@ struct SettingsView: View {
                                         }
                                     }
                                 }
-                                Text(L("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为MacPlay的Wi-Fi。填写SSID与共享密码，或授权读取已保存的密码。802.1X企业Wi-Fi的用户名、个人密码或证书不能作为共享密码发送。")).font(.callout).foregroundStyle(.secondary)
+                                Text(L("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为NIO Play的Wi-Fi。填写SSID与共享密码，或授权读取已保存的密码。802.1X企业Wi-Fi的用户名、个人密码或证书不能作为共享密码发送。")).font(.callout).foregroundStyle(.secondary)
                             }
                         }
                     case .about:
@@ -1091,7 +1091,7 @@ struct SettingsView: View {
                     // Dock icon is hidden (LSUIElement): Cmd+Q has no menu, so
                     // the window needs an explicit quit affordance.
                     Button(L("退出")){NSApp.terminate(nil)}
-                        .help(L("退出 MacPlay"))
+                        .help(L("退出 NIO Play"))
                     Spacer()
                     Button(L(model.running ? "应用并重新连接" : "启动接收")){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
@@ -1104,7 +1104,7 @@ struct SettingsView: View {
         .alert(L("发现新版本"),isPresented:$updates.showPrompt){
             Button(L(updates.installer == nil ? "查看发行说明" : "下载更新")){updates.openDownload()}
             Button(L("稍后"),role:.cancel){updates.dismissPrompt()}
-        } message:{Text("MacPlay \(updates.release?.version?.description ?? "")")}
+        } message:{Text("NIO Play \(updates.release?.version?.description ?? "")")}
         .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in model.detectNetwork();model.refreshUSB();model.refreshHardware();if model.settings.language == nil || model.settings.language == "system" {model.setLanguage("system")}}
     }
 }
