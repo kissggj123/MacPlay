@@ -52,13 +52,25 @@ impl Forwarder {
         if self.clients.is_empty() || nal.is_empty() {
             return;
         }
-        // Ensure Annex B start code prefix
-        let payload: Vec<u8> = if has_start_code(nal) {
-            nal.to_vec()
+        // Fork: the NAL from iPhone may be length-prefixed (4-byte BE length).
+        // Strip it if present, then ensure Annex B start code.
+        let raw_nal: &[u8] = if nal.len() > 4 && !has_start_code(nal) {
+            // Check if first 4 bytes look like a length prefix
+            let len = u32::from_be_bytes([nal[0], nal[1], nal[2], nal[3]]) as usize;
+            if len == nal.len() - 4 {
+                &nal[4..]
+            } else {
+                nal
+            }
         } else {
-            let mut v = Vec::with_capacity(4 + nal.len());
+            nal
+        };
+        let payload: Vec<u8> = if has_start_code(raw_nal) {
+            raw_nal.to_vec()
+        } else {
+            let mut v = Vec::with_capacity(4 + raw_nal.len());
             v.extend_from_slice(&START_CODE);
-            v.extend_from_slice(nal);
+            v.extend_from_slice(raw_nal);
             v
         };
         let mut dead = Vec::new();
