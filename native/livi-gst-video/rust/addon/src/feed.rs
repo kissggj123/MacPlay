@@ -197,6 +197,9 @@ pub fn set_stream_codec(id: u32, codec: Option<CpCodec>) {
 
 /// Routes one frame to the planes a stream serves, through its keyframe gate.
 pub fn push_video(id: u32, nal: &[u8]) {
+    // Fork: direct H.264 forward (no GStreamer) in zero-transcode mode
+    crate::h264direct::push_nal(nal);
+
     // The pushes happen outside the lock, a full source may block.
     let targets = {
         let mut reg = lock();

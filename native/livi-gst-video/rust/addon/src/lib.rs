@@ -4,6 +4,7 @@
 
 mod feed;
 mod audio_recv;
+mod h264direct;
 mod mic_uplink;
 mod screen_recv;
 
@@ -252,6 +253,9 @@ pub fn open_video_receiver(
     key: Buffer,
     on_config: napi::JsFunction,
 ) -> napi::Result<u32> {
+    // Fork: start direct H.264 forwarder (no GStreamer) in zero-transcode mode
+    h264direct::maybe_start();
+
     let key: [u8; 32] = key
         .as_ref()
         .try_into()
