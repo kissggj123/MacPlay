@@ -1,163 +1,137 @@
 <p align="center"><img src="assets/icons/mac/macplay.iconset/icon_128x128.png" width="104" alt="MacPlay应用图标"></p>
 
-<h1 align="center">MacPlay</h1>
+<h1 align="center">MacPlay（车机浏览器版）</h1>
 
-<p align="center">在Mac上显示和操作iPhone的CarPlay界面，支持USB直连与共用Wi-Fi无线连接。</p>
+<p align="center">iPhone → Mac → 车机浏览器：在车载大屏的浏览器里显示和操作 CarPlay。</p>
 
 <p align="center">
-  <a href="scripts/package-native.sh"><img src="https://img.shields.io/badge/version-1.2.2-2563eb?style=flat-square" alt="版本1.2.2"></a>
-  <a href="#使用条件"><img src="https://img.shields.io/badge/platform-macOS%2014%2B-555555?style=flat-square" alt="运行平台"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="项目许可"></a>
+  <a href="#使用条件"><img src="https://img.shields.io/badge/platform-macOS%2014%2B-555555?style=flat-square" alt="运行平台"></a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/Roylyl/MacPlay/releases"><img src="https://img.shields.io/github/downloads/Roylyl/MacPlay/total?style=flat-square&amp;label=downloads&amp;color=2563eb" alt="发行附件累计下载量"></a>
-  <a href="https://github.com/Roylyl/MacPlay/stargazers"><img src="https://img.shields.io/github/stars/Roylyl/MacPlay?style=flat-square&amp;label=stars&amp;color=2563eb" alt="GitHub Star数"></a>
-  <a href="https://github.com/Roylyl/MacPlay/forks"><img src="https://img.shields.io/github/forks/Roylyl/MacPlay?style=flat-square&amp;label=forks&amp;color=555555" alt="GitHub Fork数"></a>
-  <a href="https://github.com/Roylyl/MacPlay/issues"><img src="https://img.shields.io/github/issues/Roylyl/MacPlay?style=flat-square&amp;label=issues&amp;color=555555" alt="开放Issue数"></a>
-  <a href="https://github.com/Roylyl/MacPlay/pulls"><img src="https://img.shields.io/github/issues-pr/Roylyl/MacPlay?style=flat-square&amp;label=pull%20requests&amp;color=555555" alt="开放Pull Request数"></a>
-  <a href="https://github.com/Roylyl/MacPlay/commits"><img src="https://img.shields.io/github/last-commit/Roylyl/MacPlay?style=flat-square&amp;label=last%20commit&amp;color=555555" alt="最近提交时间"></a>
-</p>
+<p align="center"><a href="#快速入门">快速入门</a> · <a href="#车机浏览器">车机浏览器</a> · <a href="#本版特有功能">本版特有功能</a> · <a href="#从源码构建">源码构建</a> · <a href="#致谢">致谢</a> · <a href="#许可">许可</a></p>
 
-<p align="center"><a href="#快速入门">快速入门</a> · <a href="#主要功能">主要功能</a> · <a href="#其他平台">其他平台</a> · <a href="#从源码构建">源码构建</a> · <a href="#来源与许可">来源与许可</a></p>
+## 这是什么
 
-<p align="center">其他设备：<a href="https://github.com/Roylyl/AndroidPlay">AndroidPlay</a> · <a href="https://github.com/Roylyl/WinPlay">WinPlay</a></p>
+本仓库是 [MacPlay](https://github.com/Roylyl/MacPlay) 的 fork，目标只有一个场景：**把 Mac 变成 CarPlay 接收器，再把画面串流到车机浏览器**。
+
+```
+iPhone --(USB/无线 CarPlay)--> Mac --(局域网 http://<Mac-IP>:8080)--> 车机浏览器
+```
+
+Mac、iPhone、车机在同一局域网（通常是车机/手机热点）。Mac 负责与 iPhone 建立 CarPlay 连接并解码，车机浏览器只负责显示画面、回传触控、播放声音——车机侧零安装，打开浏览器即可。
+
+相比上游，本版新增：浏览器串流（视频/触控/音频）、无头模式、连接时防休眠、局域网地址展示与防火墙一键放行；并移除了 CarPlay 主屏幕上的 MacPlay 入口图标、默认关闭了自动检查更新。
 
 ## 快速入门
 
 ### 使用条件
 
 - macOS 14 及以上，Apple Silicon（M 系列）处理器。**目前仅提供 ARM64 构建，Intel 机型需自行从源码编译。**
-- 支持CarPlay的iPhone；有线需要USB数据线，无线需要蓝牙与允许设备互访的共用Wi-Fi。
-- 安装包内置Node.js与GStreamer运行组件，无需额外安装开发工具。
+- 支持 CarPlay 的 iPhone；有线需要 USB 数据线，无线需要蓝牙与允许设备互访的共用 Wi-Fi。
+- 车机（或任意设备）浏览器，与 Mac 在同一局域网。
 
-### 安装
+### 安装与启动
 
-前往[GitHubReleases](https://github.com/Roylyl/MacPlay/releases)，根据“苹果菜单→关于本机”中的芯片信息选择安装包：
+```sh
+git clone https://github.com/kissggj123/MacPlay-CarBrowser.git
+cd MacPlay-CarBrowser
+pnpm install
+bash scripts/build-macplay.sh
+```
 
-| Mac类型 | 安装包 |
-| --- | --- |
-| AppleM系列 | `MacPlay-1.2.2-arm64.dmg` |
-| Intel | `MacPlay-1.2.2-x86_64.dmg` |
+构建产物为 `dist/MacPlay.app`，拖入"应用程序"后启动。若 macOS 拦截，在"系统设置 → 隐私与安全性"中允许打开（本地签名，未经 Apple 公证）。
 
-打开DMG，将MacPlay拖入“应用程序”后启动。若macOS拦截，在“系统设置→隐私与安全性”中允许打开。当前包采用本地签名，未经过Apple公证。
+### 连接 iPhone
 
-首次启动自动准备内置认证文件，默认1280×720、60fps，并优先使用内建显示器。更新安装保留已有设置。完整步骤见[发行版使用教程](docs/发行版使用教程.md)。在“连接→应用”选择跟随系统、简体中文、繁體中文或English，默认跟随Mac系统语言；CarPlay内部语言仍跟随iPhone。
+1. **有线**：USB 连接 iPhone 与 Mac，解锁并"信任此电脑"，在"连接"页选"有线 CarPlay"，点击"启动接收"。
+2. **无线**：Mac 与 iPhone 加入同一 Wi-Fi，蓝牙配对，在"连接 → 共用 Wi-Fi"填写 SSID 与密码，点击"启动接收"，在 iPhone 上允许 CarPlay。
 
-### 有线CarPlay
+连接成功后，Mac 本机会显示 CarPlay 画面（如需隐藏见[无头模式](#无头模式)）。
 
-1. 用USB数据线连接iPhone与Mac，解锁iPhone并完成“信任此电脑”。
-2. 在“连接”页选择“有线CarPlay”，多台设备同时接入时选择目标iPhone。
-3. 点击“启动接收”，在iPhone上确认CarPlay提示。
+### 打开车机浏览器
 
-有线无需填写Wi-Fi信息。在“连接→应用”开启“USB接入时自动启动CarPlay”，MacPlay运行期间接入iPhone就会启动有线接收。已指定设备时只响应该设备；首次使用仍需解锁并确认信任。修改设置后，点击“应用并重新连接”。
+在 MacPlay"设置 → 连接 → 应用 → **车机浏览器**"中查看本机局域网地址（如 `http://192.168.43.10:8080`），在车机浏览器打开即可。页面即全屏式 CarPlay 界面：画面显示、触控操作、声音播放都在浏览器里完成。
 
-### 无线CarPlay
+## 车机浏览器
 
-1. Mac和iPhone加入同一个允许设备互访的Wi-Fi，选择“无线CarPlay”。
-2. 点击“读取当前网络”或手动填写SSID；填写Wi-Fi共享密码，也可点击“读取已保存密码”并按钥匙串提示授权。
-3. 打开蓝牙设置，在iPhone上选择Mac的系统名称，在两端确认配对码。
-4. 在MacPlay选择目标iPhone，点击“启动接收”，在iPhone上允许CarPlay连接。
+### 地址与防火墙
 
-MacPlay通过蓝牙引导，再通过共用Wi-Fi传输音视频，不创建名为MacPlay的热点。读取Wi-Fi名称需要定位权限，读取密码可能要求钥匙串授权。企业802.1X和网页登录凭据不适用于此握手，建议使用个人Wi-Fi或有线连接。
+- 设置页列出本机所有局域网 IPv4 地址（Wi-Fi 优先），一键复制。
+- 局域网只需放行 **TCP 8080**（画面/触控/音频都走它）。监听的是 `MacPlayReceiver` 进程。
+- 若 macOS 防火墙开启且未放行，设置页会提示并提供"一键放行 MacPlayReceiver"（需管理员密码，调用 `socketfilterfw --add`），或手动前往"系统设置 → 网络 → 防火墙"允许。
+- iPhone ↔ Mac 的 CarPlay 通道（USB 经系统 usbmuxd、无线经蓝牙/Wi-Fi）走 MacPlay 自身，不受此影响。
 
-## 主要功能
+### 技术实现
 
-- 原生设置界面：SwiftUI主窗口提供连接、显示、音频和关于四页，AppKit独立窗口显示CarPlay。
-- 多屏与窗口适配：选择内建或外接显示器，默认适配窗口并可等比例调整大小，也可开启严格物理像素显示。
-- 点击与触控板：支持点击、拖动和双指滚动，滚动转换为CarPlay触摸滑动。
-- 音频与设备：实时调整媒体和通话音量，分别选择输入/输出设备，默认跟随系统。
-- 系统媒体控件：向macOS播放面板同步歌曲、歌手、专辑、封面、进度和播放状态，支持播放控制及播放器允许的进度跳转。
-- 设备记忆与断开复位：记住上次连接的iPhone；断开后关闭画面并返回连接主页；可选择在无线连接被动断开后自动重连。
-- 语言与后台运行：支持跟随Mac系统、简体中文、繁體中文和English；可选USB接入自动启动及菜单栏常驻。
-- 统一窗口入口：主窗口与CarPlay画面共用MacPlay的Dock入口；关闭CarPlay画面先确认断开，点击CarPlay中的MacPlay图标可打开主窗口。
+- **视频（零转码）**：GStreamer 管道在 `h264parse` 后直接分流原始 H.264，经 WebSocket `/h264` 送浏览器，用 **WebCodecs** 硬解——Mac 端不解码不重编码，纯转发（M1 的 VideoToolbox 本来也是硬解，但直通连解都省了）。需要 HTTPS（自签证书，首次访问车机浏览器点一次"继续前往"即可），端口 8443。
+- **视频（兼容模式）**：浏览器不支持 WebCodecs（如非 HTTPS）时自动回退 MJPEG：GStreamer 内 `tee` 分支出一路 `videoscale → jpegenc`（960px 宽，约 15fps）→ `/mjpeg`。非截屏方案，Mac 熄屏/合盖（接电源）不影响串流。
+- **音频**：借鉴 [WheelPlay](https://github.com/fython/wheelplay) 的浏览器音频协议。Rust 端输出各路 CarPlay 音频流解码后的 PCM，经二进制帧（magic `0x31415057` + stream id + 采样率/声道 + 序号 + Int16LE）走 TCP 到 Node，再以 WebSocket 二进制转发；浏览器用 Web Audio API 播放，媒体流约 300ms 缓冲、实时/通话流约 60ms。各流独立，无 Mac 端混音。Web 模式下 Mac 本地不再发声。
+- **触控**：浏览器 touch/pointer 事件经 WebSocket `/touch` 回传，调用既有 `sendTouches()`。坐标映射考虑 `object-fit: contain` 的黑边（letterbox-aware），move 事件经 `requestAnimationFrame` 合并，页面隐藏/失焦自动松开触点。
+- **键盘旋钮**：方向键 = 旋钮推拉、回车 = 确认、Esc = 返回、H = Home，经 `/touch` 的 `knob` 消息走 HID 上报（借鉴 PlayPort）。
+- **状态 HUD**：左上角实时显示当前视频模式（WebCodecs/MJPEG）、帧率、码率。
 
-- 关于与更新：查看版本、检查GitHub正式发行版，按芯片选择安装包，支持自动更新提醒和TXT日志导出。
+## 本版特有功能
 
-### 无线自动重连
+### 无头模式
 
-在“连接→共用Wi-Fi”开启“无线连接被动断开时自动重连”。默认关闭，只回连已成功连接后被动断开的iPhone，使用上次应用的配置。首次等待5秒，失败后按10、20、30、60秒延长间隔；主动停止、确认断开、退出或关闭开关会取消重连。首次连接失败不进入自动重连。
+"连接 → 应用 → 无头模式（不在 Mac 上显示 CarPlay 画面）"：Rust 端视频管道改用 `fakesink`，Engine 不再创建/显示原生 CarPlay 窗口，画面只在浏览器。切换后重新连接生效。适合把 Mac 藏起来只用车机屏的场景。
 
-切换Wi-Fi后需要读取或填写新网络密码；同一网络读取密码失败时保留已有输入。最终60fps尝试等待视频超过45秒会结束，避免一直停留在等待界面。
+### 连接时防止系统休眠
 
-## 其他平台
+"连接 → 应用 → CarPlay 连接时防止系统休眠"：CarPlay 会话期间自动执行 `caffeinate -s`（阻止系统空闲休眠，允许显示器休眠），断开后自动释放。合盖使用需接电源（macOS 限制）。
 
-使用Mac时选择MacPlay；如果还想在Windows电脑或Android设备上使用CarPlay，可以按设备选择下面的项目。
+另外 `scripts/car-mode.sh` 提供独立两窗口工作流：一个窗口正常配置/运行 MacPlay，另一个窗口运行该脚本（`caffeinate -i` + 立即熄屏），Ctrl-C 退出并唤醒屏幕。
 
-| 项目 | 平台 | 适合的使用场景 |
-| --- | --- | --- |
-| [WinPlay](https://github.com/Roylyl/WinPlay) | Windows10/11x64 | 适合Windows电脑。支持本机移动热点和现有局域网两种无线模式，提供独立画面窗口与系统媒体控件。 |
-| [AndroidPlay](https://github.com/Roylyl/AndroidPlay) | Android9及以上 | 适合Android手机、平板和车机。通过系统热点与蓝牙连接iPhone，提供全屏画面、音频和通知栏媒体控制。 |
+### 精简与省电
 
-## 显示与声音
+- 自动检查更新默认关闭（上游检查的是原仓库，对 fork 无意义，还每 2 小时联网一次）；手动检查改为读取本 fork 的 releases。
+- 车机使用建议：帧率选 30fps、分辨率 1280×720——浏览器 MJPEG 本来也就十几帧，更高帧率下 iPhone 渲染/编码与 Mac 解码都是白费电。
 
-“显示”页提供屏幕原生像素（避开刘海）、1280×720、1920×1080、2560×1440和自定义宽高。默认720p关闭“严格按屏幕物理像素显示”，窗口按画面比例适配所选屏幕，初始尺寸不超过可用区域的80%，可以拖动边框等比例调整大小；请求给iPhone的分辨率不变。开启严格像素显示后，窗口按物理像素固定大小，仍可移动。原生像素模式始终全屏并避开刘海。更改显示选项后点击“应用并重新连接”。
+### M1 性能优化
 
-收到首帧解码画面后才打开CarPlay窗口。将鼠标移到画面顶部并停留片刻，可显示悬浮标题栏，用于拖动、最小化或关闭窗口；关闭时会询问是否断开连接。
+- **视频解码**：macOS 下默认走 `vtdec`（VideoToolbox），M1 媒体引擎硬解，CPU 占用极低。
+- **零转码模式**："连接 → 应用 → 零转码模式"：跳过 Mac 端视频解码，H.264 直接转发给浏览器 WebCodecs 硬解。需配合无头模式 + Chromium 系浏览器（HTTPS）。此模式下 Mac 视频部分 CPU 占用接近零（纯转发），是 M1 最佳性能/最低功耗组合。
+- **音频**：PCM 直发 WebSocket，无重编码，开销可忽略。
 
-帧率可选30/60/90/120fps，默认60fps。120的视频启动协商失败后依次尝试90和60，90失败后尝试60；回退只影响本次连接。高帧率是请求上限，实际输出由iPhone、网络和解码能力决定。
+## 原生功能（继承自上游）
 
-CarPlay自身的“设置→显示屏→智能缩放显示”可能改变图标、文字和渲染尺寸。希望按所选像素显示时可关闭该开关，再应用并重新连接；MacPlay不提供缩放倍率，也不远程控制此设置。
+- USB 直连 / 共用 Wi-Fi 无线连接，蓝牙引导配对，SSID/密码读取（需定位与钥匙串授权）。
+- 显示设置：屏幕原生像素（避开刘海）、1280×720 / 1920×1080 / 2560×1440 / 自定义，帧率 30/60/90/120fps（高帧率协商失败自动回退）。
+- 音频：媒体/通话音量实时调节，输入/输出设备选择（Web 模式下音量仍作用于浏览器音频）。
+- 无线被动断开自动重连、USB 接入自动启动、菜单栏常驻后台运行。
+- 跟随系统 / 简体中文 / 繁體中文 / English 四种界面语言。
 
-媒体/通话音量实时生效，输入/输出设备更换后需应用并重新连接。播放歌曲后可在Mac控制中心查看音乐信息；播放器提供有效时长并允许跳转时，可以拖动系统进度条。封面按歌曲身份关联，标题变化不作为切歌，迟到的旧封面不会覆盖新曲目。本版不提供独立歌词同步。
+## 从源码构建
 
-## 关于、更新与日志
+需要 macOS、Xcode 命令行工具、Node.js、pnpm、Rust、pkg-config 及 GStreamer 开发 SDK。将 SDK 的 `lib/pkgconfig` 加入 `PKG_CONFIG_PATH`，在仓库根目录执行：
 
-在侧栏最后的“关于”页查看版本号、构建号和运行架构。点击“检查更新”读取GitHub正式发行版，按版本号比较，并为当前Mac选择M系列或Intel安装包；通过Rosetta运行时仍优先选择M系列版。没有对应安装包时可打开发行说明。
+```sh
+pnpm install
+bash scripts/build-macplay.sh
+```
 
-“自动检查更新”默认开启，每次启动检查一次，持续运行时每两小时静默检查。后台检查结果显示在“关于→软件更新”，不弹窗；启动发现新版时提示，同一版本确认后不重复提醒。检查失败会显示错误，手动检查可随时执行。点击“下载更新”后通过浏览器下载，退出旧版再替换应用，不自动安装。
-
-在“关于→日志”点击“导出日志”，选择位置保存TXT。导出当前连接日志，过滤网络密码及常见设备标识，不包含设置文件或认证文件。发送给他人前仍可自行查看导出内容。
+构建脚本处理 SwiftUI 应用、蓝牙桥接、Rust 后端、音视频模块和 Node.js 服务，并进行本地签名。TypeScript 严格模式编译与浏览器 JS 语法检查是构建的一部分。
 
 ## 常见问题
 
 | 现象 | 处理方法 |
 | --- | --- |
-| USB未识别 | 更换数据线，解锁iPhone并确认信任，查看连接阶段 |
-| 无线一直等待连接 | 检查配对、目标设备、SSID和密码，确认Wi-Fi允许设备互访 |
-| 读取不到Wi-Fi名称或密码 | 查看按钮下方的灰色结果提示；授权定位/钥匙串访问，或手动填写。密码读取失败保留实际系统状态码 |
-| 自定义分辨率无法启动 | 关闭严格像素显示以适配窗口，或降低分辨率、选择原生像素模式 |
-| 系统进度条不能拖动 | 播放器需提供有效时长和跳转权限；直播通常不支持 |
-| 选择另一台iPhone后没有连接 | 确认目标已接入或配对，再应用并重新连接 |
+| 车机浏览器打不开页面 | 确认车机与 Mac 同一局域网；在 MacPlay 设置"车机浏览器"中复制正确的地址；检查 macOS 防火墙是否放行 TCP 8080 |
+| 有画面没声音 | 确认浏览器已允许自动播放/取消静音；Web 模式下声音只在浏览器播放，Mac 本地无声是正常的 |
+| 触控位置偏移 | 页面缩放保持 100%；已做黑边适配，如仍偏移请提 issue 附车型浏览器信息 |
+| 合盖后断开 | macOS 限制：合盖持续运行需连接电源，并开启"连接时防止系统休眠" |
+| 无线一直等待连接 | 检查蓝牙配对、SSID/密码，确认 Wi-Fi 允许设备互访 |
 
-“自动（上次连接的iPhone）”不会在目标缺席时擅自改连其他设备。点击CarPlay窗口的红色关闭按钮，会先询问是否断开；取消后继续保持连接。CarPlay中的MacPlay入口用于打开设置主窗口。
+## 致谢
 
-开启“连接→应用→允许后台运行”后，关闭主窗口会保持接收，菜单栏显示简约图标，可打开主窗口、显示画面、启动/停止接收或退出；Dock中的MacPlay也提供两个窗口的入口。未开启后台运行时，关闭主窗口会退出应用。后台运行不等于开机启动。更新前退出旧版，再替换应用。
+- **[MacPlay](https://github.com/Roylyl/MacPlay)**（Roylyl）：完整的 macOS CarPlay 主机实现（USB/无线传输、GStreamer 音视频管道、SwiftUI 界面）。本项目是其 fork，核心连接与解码能力全部来自上游。
+- **[WheelPlay](https://github.com/fython/wheelplay)**（fython）：车载 Android 设备的 CarPlay 接收器。其网页客户端的二进制 PCM 音频协议（WebSocket + Web Audio API）与触控坐标映射思路被本项目移植/借鉴到 Mac 端浏览器串流。
+- **[PlayPort](https://github.com/youcci/playport)**（youcci）：macOS 上的无线 CarPlay 浏览器接收器。其 WebCodecs H.264 零转码直通架构（服务端不解码不重编码、浏览器硬解）、显示设置面板、音频混音器、麦克风回传、Focus 模式等设计被本项目借鉴实现。
+- 上游依赖：[LIVI](https://github.com/f-io/LIVI)（CarPlay 协议基础）、[DiPlay](https://github.com/shihabal3amri/DiPlay)。
 
-## 认证与数据
+## 许可
 
-1.2.2内置实验性认证材料，首次启动不覆盖本机已有身份。也可在“关于→认证文件→导入认证文件”选择匹配且获准使用的`identity.pk8`与`certificate.p7b`；普通Apple开发者签名证书不能替代配件认证。材料来源见[认证来源](assets/authentication/SOURCE.txt)。公开下载不等于取得再分发授权，公开分发前应确认材料权利。
+沿用上游 GPL-3.0-or-later，见 [LICENSE](LICENSE)；运行库许可位于 `assets/licenses` 与 `assets/gstreamer/LICENSES`。上游版权与来源声明见 [NOTICE](NOTICE)。
 
-设置、Wi-Fi密码、设备记录与配对身份保存在本机应用支持目录，不上传到服务器。定位权限用于读取Wi-Fi信息，蓝牙/本地网络用于连接，麦克风用于通话和语音。分享诊断日志前应遮盖手机名称、地址和网络信息。
-
-## 从源码构建
-
-需要macOS、Xcode命令行工具、Node.js、pnpm、Rust、pkg-config及GStreamer开发SDK。将SDK的`lib/pkgconfig`加入`PKG_CONFIG_PATH`，在仓库根目录执行：
-
-~~~sh
-pnpm install
-pnpm run build
-~~~
-
-默认按本机架构构建；指定架构时选择一条命令：
-
-~~~sh
-# AppleM系列
-pnpm run build -- --arch=arm64
-# Intel
-pnpm run build -- --arch=x64
-~~~
-
-生成`dist/MacPlay.app`和`dist/MacPlay-1.2.2-<arch>.dmg`，架构为`arm64`或`x86_64`。脚本处理SwiftUI应用、蓝牙桥接、Rust后端、音视频模块和Node.js服务，并进行本地签名与DMG打包。
-
-## 更新日志
-
-1.2.2完善无线认证后的服务发现与有限重试，首帧解码后再显示窗口，新增可选窗口适配，增强音频统计及麦克风会话隔离。包含[Artist-x的PR#6](https://github.com/Roylyl/MacPlay/pull/6)提供的悬浮标题栏和后台窗口恢复改进。完整变更见[CHANGELOG](CHANGELOG.md)。Intel支持由[drewpall的PR#1](https://github.com/Roylyl/MacPlay/pull/1)提供基础实现。
-
-## 来源与许可
-
-网络发现实现参考同系列[WinPlay](https://github.com/Roylyl/WinPlay)，保留来源说明。
-
-MacPlay基于[LIVI](https://github.com/f-io/LIVI)，参考[DiPlay](https://github.com/shihabal3amri/DiPlay)，保留LasseHeitgres及贡献者的版权和许可声明，见[NOTICE](NOTICE)。项目沿用GPL-3.0-or-later，见[LICENSE](LICENSE)；运行库许可位于`assets/licenses`与`assets/gstreamer/LICENSES`。
-
-第三方组件、认证文件和商标分别适用各自权利条件。MacPlay是独立衍生项目，不代表Apple或上游作者，不声称获得MFi认证。分发修改版时应保留声明并提供适用许可证要求的对应源码与构建资料。
+第三方组件、认证文件和商标分别适用各自权利条件。本项目是独立 fork，不代表 Apple、上游作者或 WheelPlay 作者，不声称获得 MFi 认证。分发修改版时应保留声明并提供适用许可证要求的对应源码与构建资料。

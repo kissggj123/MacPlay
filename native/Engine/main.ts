@@ -2,7 +2,7 @@ import { Discovery } from './discovery'
 import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import readline from 'node:readline'
 import { CpStack } from './protocol/cpStack'
 import { loadOrCreateIdentity, accessoryDeviceId } from './protocol/identity'
@@ -35,7 +35,7 @@ const identity=loadOrCreateIdentity()
 // here and declared them via oemIconVisible/oemIcons in iAP2 identification; the
 // icon's only function was opening the MacPlay window from CarPlay, which the
 // browser-client setup doesn't need. To restore: load the PNGs as upstream did.
-const icons:{widthPixels:number;heightPixels:number;data:Buffer}=[]
+const icons:{widthPixels:number;heightPixels:number;data:Buffer}[]=[]
 // const icons=[256,512].map(size=>({widthPixels:size,heightPixels:size,data:fs.readFileSync(path.join(resources,'icons',`macplay-${size}.png`))}))
 const helperControl=new CpHelperSock()
 const config={deviceName:'MacPlay',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,disableAudioOutput:!settings.audioEnabled,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'MacPlay',icons,rightHandDrive:false}
@@ -52,7 +52,7 @@ const frameRateGuard=new FrameRateFallback(settings.fps,fps=>{
 addon.macplaySelectDisplayOptions(settings.displayID||0)
 addon.macplaySetWindowLanguage(process.env.MACPLAY_LANGUAGE||'system')
 addon.macplayConfigureWindowOptions(settings.width,settings.height,settings.screenPixelWidth,settings.screenPixelHeight,settings.resolution==='native',settings.strictPixels===true)
-setVideoCallback(()=>{frameRateGuard.videoStarted();videoDeadline.cancel();const firstVideo = !videoReady;videoReady=true;if(firstVideo)process.stdout.write(JSON.stringify({showCarPlay:true})+'\n');if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('CarPlay已连接','首帧已解码，CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
+setVideoCallback(()=>{frameRateGuard.videoStarted();videoDeadline.cancel();const firstVideo = !videoReady;videoReady=true;if(firstVideo&&process.env.MACPLAY_HEADLESS!=='1')process.stdout.write(JSON.stringify({showCarPlay:true})+'\n');if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('CarPlay已连接','首帧已解码，CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
 const authDir=path.join(dataDir,'authentication')
 if (!fs.existsSync(path.join(authDir,'identity.pk8')) || !fs.existsSync(path.join(authDir,'certificate.p7b'))) {
  log('缺少认证文件','请在关于页面打开认证目录，放入有使用权限的配套文件。');process.exit(2)
@@ -83,9 +83,9 @@ const server=net.createServer(socket=>{
  stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
  stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
  stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled)
- stack.on('session-active',()=>{sessionReady=true;frameRateGuard.negotiationStarted();armDeadline();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);if(!videoReady)log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流')})
+ stack.on('session-active',()=>{sessionReady=true;frameRateGuard.negotiationStarted();armDeadline();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);if(!videoReady)log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流');syncSleepAssertion()})
  stack.on('disconnect-reason',(reason:string)=>{disconnectReason=reason})
- stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;log(disconnectReason,'重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
+ stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;syncSleepAssertion();log(disconnectReason,'重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
  stack.on('host-ui-requested',()=>{process.stdout.write(JSON.stringify({showMain:true})+'\n');diagnostic('show-main')})
  stack.on('error',(e:Error)=>{diagnostic('session-error',e.message);if(!videoReady)log('会话错误',e.message)})
  stack.attachSocket(socket)
@@ -96,15 +96,83 @@ server.listen({port:17000,host:'::',ipv6Only:false},()=>{
  log('等待iPhone连接',settings.wireless?'无线CarPlay接收已启用，请在系统蓝牙中配对iPhone':'有线CarPlay接收已启用，请连接USB数据线')
 })
 // Fork: browser re-stream for the car head-unit browser over LAN.
-// Serves the touch-enabled MJPEG client on 0.0.0.0:<httpPort> and proxies
-// video from the Rust helper's web tap (127.0.0.1:<mjpegPort>).
-// Env overrides: MACPLAY_WEB_HTTP_PORT (default 8080), MACPLAY_WEB_PORT (default 18081).
+// Serves the touch-enabled client on 0.0.0.0:<httpPort> (MJPEG fallback) and
+// 0.0.0.0:<httpsPort> (WebCodecs H.264 passthrough, zero-transcode).
+// Proxies video from the Rust helper's web taps (127.0.0.1:<mjpegPort> and
+// 127.0.0.1:<h264Port>).
+// Env overrides: MACPLAY_WEB_HTTP_PORT (default 8080),
+// MACPLAY_WEB_HTTPS_PORT (default 8443), MACPLAY_WEB_PORT (default 18081),
+// MACPLAY_H264_PORT (default 18083).
+// Fork: web streaming is always on in this fork. The Rust pipelines (video AND
+// audio) run inside THIS Node process via the livi-gst-video addon, so the env
+// vars must be set here — passing them only to the livi-helperd child (below)
+// does nothing for pipeline_desc(), which reads them at pipeline build time.
+process.env.MACPLAY_WEB_PORT ||= '18081'
+process.env.MACPLAY_WEB_AUDIO_PORT ||= '18082'
+process.env.MACPLAY_H264_PORT ||= '18083'
+process.env.MACPLAY_MIC_PORT ||= '18084'
 startWebServer({
   httpPort:Number(process.env.MACPLAY_WEB_HTTP_PORT||'8080'),
+  httpsPort:Number(process.env.MACPLAY_WEB_HTTPS_PORT||'8443'),
   mjpegPort:Number(process.env.MACPLAY_WEB_PORT||'18081'),
+  audioPort:Number(process.env.MACPLAY_WEB_AUDIO_PORT||'18082'),
+  h264Port:Number(process.env.MACPLAY_H264_PORT||'18083'),
+  micPort:Number(process.env.MACPLAY_MIC_PORT||'18084'),
+  certDir:path.join(dataDir,'certs'),
   getStack:()=>active,
   isVideoReady:()=>videoReady,
 })
+// Fork: optional no-sleep while CarPlay is connected
+// (settings: preventSleepWhenConnected, toggled in the app's settings UI).
+// Holds a `caffeinate -s` assertion: PreventSystemSleep, which also covers
+// lid-closed operation while on AC power. Display sleep is unaffected
+// (deliberately no -d): closing the lid just turns the display off.
+let sleepBlocker: ChildProcess | undefined
+const settingsFile = process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'settings.json')
+function sleepSettingOn(): boolean {
+  try {
+    return JSON.parse(fs.readFileSync(settingsFile,'utf8')).preventSleepWhenConnected === true
+  } catch { return false }
+}
+function syncSleepAssertion(): void {
+  const want = !stopping && sleepSettingOn() && (videoReady || sessionReady)
+  if (want && !sleepBlocker) {
+    try {
+      sleepBlocker = spawn('caffeinate', ['-s'], {stdio:'ignore'})
+      sleepBlocker.on('error', ()=>{ sleepBlocker=undefined })
+      sleepBlocker.on('exit', ()=>{ sleepBlocker=undefined })
+      diagnostic('sleep-assertion-on')
+    } catch { sleepBlocker = undefined }
+  } else if (!want && sleepBlocker) {
+    try { sleepBlocker.kill() } catch {}
+    sleepBlocker = undefined
+    diagnostic('sleep-assertion-off')
+  }
+}
+let sleepWatchTimer: NodeJS.Timeout | undefined
+// Fork (headless): mirror the `headless` setting into the env so the Rust
+// video pipeline (fakesink) and media.ts (no window) pick it up. Re-read on
+// every settings change; takes effect on the next video session.
+function syncHeadlessEnv(): void {
+  try {
+    const s=JSON.parse(fs.readFileSync(settingsFile,'utf8'))
+    if (s.headless === true) process.env.MACPLAY_HEADLESS='1'
+    else delete process.env.MACPLAY_HEADLESS
+    // Fork (M1): zero-transcode mode — skip video decode entirely.
+    // Requires headless + WebCodecs browser; no MJPEG fallback.
+    if (s.zeroTranscode === true) process.env.MACPLAY_NO_DECODE='1'
+    else delete process.env.MACPLAY_NO_DECODE
+  } catch {}
+}
+syncHeadlessEnv()
+try {
+  // Pick up the toggle being flipped while connected, without an Engine restart.
+  fs.watch(settingsFile, (event) => {
+    if (event !== 'change') return
+    clearTimeout(sleepWatchTimer)
+    sleepWatchTimer = setTimeout(()=>{syncSleepAssertion();syncHeadlessEnv()}, 500)
+  })
+} catch { /* settings file may not exist yet */ }
 let mediaTicks=0,lastCounts=[0,0]
 const mediaStats=setInterval(()=>{
  const counts:number[]=addon.mediaActivity();mediaTicks++
@@ -145,5 +213,5 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 })
 const startupDeadline=setTimeout(()=>{if(!stopping&&!videoReady){disconnectReason='连接启动超时';diagnostic('handoff-summary',discovery?.summary());log(disconnectReason);process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}},90000)
 let stopping=false
-function shutdown(){if(stopping)return;stopping=true;discovery?.destroy();clearTimeout(startupDeadline);videoDeadline.cancel();frameRateGuard.cancel();clearInterval(pump);clearInterval(mediaStats);for(const s of sessions)s.stop();addon.macplayCloseVideoWindow();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
+function shutdown(){if(stopping)return;stopping=true;syncSleepAssertion();discovery?.destroy();clearTimeout(startupDeadline);videoDeadline.cancel();frameRateGuard.cancel();clearInterval(pump);clearInterval(mediaStats);for(const s of sessions)s.stop();addon.macplayCloseVideoWindow();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);process.stdin.on('end',shutdown)

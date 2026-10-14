@@ -5,7 +5,9 @@
 //! releases each buffer at its running time, which the phone's burst delivery
 //! needs.
 
+pub mod micinput;
 pub mod uplink;
+pub mod webaudio;
 
 use gstreamer as gst;
 use gstreamer_app as gst_app;
@@ -70,17 +72,33 @@ fn sink_chain(cfg: &Config) -> String {
 
 /// The whole pipeline for `cfg`. The caps go onto the appsrc afterwards, so the
 /// RFC 3640 fields keep their string types.
+///
+/// Fork (web audio): when `MACPLAY_WEB_PORT` is set, the decoded PCM is teed to
+/// an appsink named `webaudio`, consumed by `webaudio.rs` (mixed across streams,
+/// Opus-encoded, served to the car browser). In web mode the local
+/// `osxaudiosink` branch is dropped — audio goes to the browser, not the Mac.
 pub fn pipeline_desc(cfg: &Config) -> String {
     let head = match decoder_chain(cfg.codec) {
         Some(chain) => format!("{} ! ", chain.replace("{latency}", &cfg.latency_ms.max(100).to_string())),
         None => String::new(),
     };
+    let tail = if std::env::var_os("MACPLAY_WEB_PORT").is_some() {
+        "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+         ! tee name=at \
+         at. ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream \
+         ! appsink name=webaudio emit-signals=false max-buffers=8 drop=true sync=false"
+            .to_owned()
+    } else {
+        format!(
+            "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 ! \
+             queue ! {sink}",
+            sink = sink_chain(cfg),
+        )
+    };
     format!(
         "appsrc name=src is-live=true format=time do-timestamp=true ! \
          {head}audioconvert ! clocksync sync=true ! volume name=vol ! \
-         audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 ! \
-         queue ! {sink}",
-        sink = sink_chain(cfg),
+         {tail}",
     )
 }
 
@@ -103,6 +121,8 @@ pub struct Player {
     visualizer: Arc<Mutex<VizAcc>>,
     codec: Codec,
     payload_type: u8,
+    /// Fork (web audio): tap id in webaudio.rs, if the web tap is active.
+    webaudio_id: Option<u32>,
 }
 
 impl Player {
@@ -118,9 +138,12 @@ impl Player {
             }
         };
 
-        if let Some(device) = &cfg.device {
+        // Fork: in web-audio mode there is no local sink (see pipeline_desc);
+        // device selection only applies when the sink exists.
+        if let Some(device) = &cfg.device
+            && let Some(sink) = pipeline.by_name(SINK_NAME)
+        {
             let (_, device_property) = audio_sink();
-            let sink = pipeline.by_name(SINK_NAME)?;
             sink.set_property(device_property, device.as_str());
         }
 
@@ -205,6 +228,10 @@ impl Player {
             });
         }
 
+        // Fork: attach the web-audio tap while `pipeline` is still borrowed.
+        // No-op unless MACPLAY_WEB_PORT is set (see webaudio.rs).
+        // audioType 3 (realtime=false) is the buffered media stream.
+        let webaudio_id = webaudio::maybe_register(&pipeline, !cfg.realtime);
         Some(Self {
             decoded,errors,
             pipeline,
@@ -215,6 +242,7 @@ impl Player {
             visualizer,
             codec: cfg.codec,
             payload_type: cfg.payload_type,
+            webaudio_id,
         })
     }
 
@@ -282,6 +310,10 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
+        // Fork: release the web-audio tap.
+        if let Some(id) = self.webaudio_id.take() {
+            webaudio::unregister(id);
+        }
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 }
