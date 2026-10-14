@@ -221,25 +221,34 @@ pub struct Player {
 impl Player {
     /// Builds the pipeline for `codec` and hangs it in the window `handle`
     /// names. None when no decoder is registered or the description fails.
+    /// In MACPLAY_NO_DECODE (zero-transcode) mode, no decoder is needed —
+    /// the pipeline forwards H.264 directly to the web tap.
     pub fn new(codec: &str, handle: usize, codec_data: &[u8]) -> Option<Self> {
         ensure_init();
 
+        let no_decode = std::env::var_os("MACPLAY_NO_DECODE").is_some();
         let sw_only = std::env::var_os("LIVI_GST_SWDEC").is_some();
-        let decoder = livi_video_codec::decoder_candidates(codec, sw_only)
-            .iter()
-            .filter_map(|name| name.to_str().ok())
-            .find(|name| gst::ElementFactory::find(name).is_some());
-        let Some(decoder) = decoder else {
-            eprintln!(
-                "[gst_video] no decoder registered for {codec}. Install the GStreamer plugin \
-                 providing it, software decoding needs gstreamer1.0-libav ({}).",
-                livi_video_codec::sw_decoder_for(codec).to_str().unwrap_or("")
-            );
-            return None;
+        let decoder = if no_decode {
+            // Zero-transcode: pipeline_desc ignores the decoder name
+            String::new()
+        } else {
+            let found = livi_video_codec::decoder_candidates(codec, sw_only)
+                .iter()
+                .filter_map(|name| name.to_str().ok())
+                .find(|name| gst::ElementFactory::find(name).is_some());
+            let Some(d) = found else {
+                eprintln!(
+                    "[gst_video] no decoder registered for {codec}. Install the GStreamer plugin \
+                     providing it, software decoding needs gstreamer1.0-libav ({}).",
+                    livi_video_codec::sw_decoder_for(codec).to_str().unwrap_or("")
+                );
+                return None;
+            };
+            d.to_string()
         };
 
         let with_cal = !livi_video_codec::calibration().is_empty();
-        let pipeline = Self::parse(codec, decoder, with_cal, handle)?;
+        let pipeline = Self::parse(codec, &decoder, with_cal, handle)?;
 
         let appsrc = pipeline.by_name("src").and_then(|e| e.downcast::<gst_app::AppSrc>().ok());
         if let Some(src) = &appsrc
