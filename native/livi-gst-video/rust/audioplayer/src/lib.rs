@@ -88,8 +88,8 @@ pub fn pipeline_desc(cfg: &Config) -> String {
         // session down (setAudioActive(false)) so the iPhone pauses, exactly
         // like a disconnected Bluetooth headphone.
         "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-         ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream \
-         ! appsink name=webaudio emit-signals=false max-buffers=8 drop=true sync=false"
+         ! queue max-size-buffers=64 max-size-bytes=0 max-size-time=0 leaky=downstream \
+         ! appsink name=webaudio emit-signals=false max-buffers=64 drop=true sync=false"
             .to_owned()
     } else {
         format!(

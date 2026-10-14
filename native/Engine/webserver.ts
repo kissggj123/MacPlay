@@ -49,6 +49,9 @@ export interface WebServerOpts {
   // Fork: current video codec in use, so a display request without an explicit
   // codec (e.g. "匹配本窗口像素") keeps streaming codec unchanged.
   currentVideoCodec?: () => 'h264' | 'h265'
+  // Fork: whether display switching can succeed at all (wireless only — wired
+  // sessions veto it because the phone never reconnects after the drop).
+  displaySwitchable?: () => boolean
   // Fork: a car browser connected/disconnected (/touch WS). Audio and mic
   // follow the display: while true the Mac local output is muted and the
   // browser mic takes over the CarPlay input when the browser opens one.
@@ -178,7 +181,7 @@ class WsParser {
 
 let lastKeyframeAt = 0
 
-function handleTouchMessage(raw: string, opts: WebServerOpts): void {
+function handleTouchMessage(raw: string, opts: WebServerOpts, sock: net.Socket): void {
   let msg: any
   try { msg = JSON.parse(raw) } catch { return }
   // Fork: PlayPort-style keyframe request from browser.
@@ -231,6 +234,14 @@ function handleTouchMessage(raw: string, opts: WebServerOpts): void {
   // Fork: display settings from browser (PlayPort-style). The browser sends
   // {t:'display', width, height, fps, codec, uiscale}; we forward to the
   // CarPlay stack to reconfigure (may trigger reconnect).
+  // Fork: smart display probing. The browser asks whether display switching is
+  // even possible before reporting its window size. Wired sessions veto every
+  // switch (the phone never reconnects after the drop), so answering up front
+  // keeps the browser from sending pointless display requests on USB.
+  if (msg && msg.t === 'displayProbe' && typeof msg === 'object') {
+    wsSendText(sock, JSON.stringify({ t: 'displayProbe', switchable: opts.displaySwitchable?.() ?? false }))
+    return
+  }
   if (msg && msg.t === 'display' && typeof msg === 'object') {
     const cfg: DisplayConfig = {
       width: Math.max(320, Math.min(3840, Math.round(Number(msg.width) || 1280))),
@@ -598,7 +609,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       (text) => {
         ;(sock as any).lastSeen = Date.now()
         if (text.includes('"ping"')) { wsSendText(sock, JSON.stringify({ t: 'pong' })); return }
-        handleTouchMessage(text, optsWithCodec)
+        handleTouchMessage(text, optsWithCodec, sock)
       },
       (bin) => { (sock as any).lastSeen = Date.now(); forwardMic(bin) },
       remove,
@@ -612,11 +623,12 @@ export function startWebServer(opts: WebServerOpts): http.Server {
   // close (screen off, WiFi drop) lingers in wsClients forever and keeps
   // browserClientCount()>0 — freezing the audio-follow/HID state. Probe every
   // 20s; a live client answers {t:'pong'} (refreshing lastSeen); 45s of
-  // silence means the socket is a half-open zombie — destroy it.
+  // silence means the socket is a half-open zombie — destroy it. 90s because
+  // Safari App Nap throttles background tabs well past 45s.
   setInterval(() => {
     for (const sock of [...wsClients]) {
       if ((sock as any).destroyed) { wsClients.delete(sock); continue }
-      if (Date.now() - ((sock as any).lastSeen ?? 0) > 45000) {
+      if (Date.now() - ((sock as any).lastSeen ?? 0) > 90000) {
         console.log('[webserver] stale touch client dropped (no pong)')
         try { sock.destroy() } catch { /* ignore */ }
         continue

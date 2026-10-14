@@ -664,7 +664,7 @@
     ws.onmessage=function(ev){
       if(typeof ev.data!=='string'){ playAudioPacket(ev.data); return; }
       // Fork: answer the server's dead-connection probe.
-      try{ var m=JSON.parse(ev.data); if(m&&m.t==='ping'){ send({t:'pong'}); return; } }catch(e){}
+      try{ var m=JSON.parse(ev.data); if(m&&m.t==='ping'){ send({t:'pong'}); return; } if(m&&m.t==='displayProbe'){ probeAnswered=!!m.switchable; return; } }catch(e){}
     };
   }
   connect();
@@ -816,9 +816,18 @@
     var dpr=window.devicePixelRatio||1;
     var w=Math.round(window.innerWidth*dpr), h=Math.round(window.innerHeight*dpr);
     if(w<320||h<240) return;
+    // Fork: smart switching — ask the server first. Wired (USB) sessions veto
+    // every display change (the phone never reconnects after the drop), so on
+    // USB we never send the request at all and rely on pure CSS scaling.
     sentFit=true;
-    send({t:'display', width:w, height:h, matchWindow:true});
+    send({t:'displayProbe'});
+    var probeWaited=0;
+    var probeTimer=setInterval(function(){
+      probeWaited+=100;
+      if(probeAnswered||probeWaited>1500){ clearInterval(probeTimer); if(probeAnswered===true||probeAnswered==null){ send({t:'display', width:w, height:h, matchWindow:true}); } }
+    },100);
   }
+  var probeAnswered=null;
   // First report once the control channel is up.
   var origConnect=connect;
   connect=function(){

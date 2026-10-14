@@ -175,8 +175,13 @@ const webServer=startWebServer({
   // locally. The audio session tracks /touch clients: no browser anywhere =
   // no audio route for the iPhone = playback pauses (like a disconnected
   // Bluetooth headphone); whichever device opens a browser gets the sound.
+  // Fork: display switching only works on wireless (wired sessions veto it).
+  displaySwitchable:()=>!!settings.wireless,
   onBrowserClients:(connected)=>{
-    for(const stack of sessions){try{stack.setAudioActive(connected)}catch(e){console.error('[audio-route]',e)}}
+    // Fork: pause/resume ONLY via CarPlay media HID keys. setAudioActive(false)
+    // made the phone tear the whole audio stream down (TEARDOWN type 100) and
+    // the receiver cannot ask the phone to rebuild it — audio stayed dead after
+    // any browser dropout. HID pause just stops packets; the stream survives.
     // Media key: 1=Play 0xB0, 2=Pause 0xB1. Leaving always pauses; on attach
     // we only auto-resume when the user hasn't opted to respect a manual
     // pause (设置：打开浏览器时自动恢复播放).
