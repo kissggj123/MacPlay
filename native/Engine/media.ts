@@ -91,7 +91,12 @@ export function openScreenReceiver(id:number,key:Buffer):number {
   const handle=headless()?Buffer.alloc(0):(windowHandle ?? (windowHandle=addon.macplayPrepareVideoWindow(aspect)))
   player=addon.createPlayer(codec===1?'h265':'h264',handle,atom,id)
   if(!player) throw new Error('无法创建CarPlay视频解码器')
-  if(!headless()){ addon.start(player); addon.setContentRegion(player,0,0,aspect*1000,1000,aspect*1000,1000) }
+  // Fork: ALWAYS start the pipeline — headless included. Without start() the
+  // pipeline stays PAUSED and neither tap (h264sink for WebCodecs, websink
+  // for MJPEG) ever delivers a sample; the browser then waits forever.
+  // Headless only skips the native-window content geometry.
+  addon.start(player)
+  if(!headless()){ addon.setContentRegion(player,0,0,aspect*1000,1000,aspect*1000,1000) }
 
  })
 }
