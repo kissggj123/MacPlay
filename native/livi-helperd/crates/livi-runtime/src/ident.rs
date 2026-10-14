@@ -52,10 +52,10 @@ pub fn build_identification(
     }
     IdentificationInformation {
         name: id.name.clone(),
-        model_identifier: if id.name == "MacPlay" {"MacPlay"} else {"LIVI"}.into(),
-        manufacturer: if id.name == "MacPlay" {"MacPlay"} else {"LIVI"}.into(),
-        serial_number: if id.name == "MacPlay" {std::env::var("MACPLAY_SERIAL").expect("MacPlay requires a persistent accessory serial")} else {"0123456".into()},
-        firmware_version: if id.name == "MacPlay" {"1.2.2"} else {"1.0.0"}.into(),
+        model_identifier: if id.name == "MacPlay" || id.name == "NIO ET5" {id.name.clone()} else {"LIVI"}.into(),
+        manufacturer: if id.name == "MacPlay" || id.name == "NIO ET5" {id.name.clone()} else {"LIVI"}.into(),
+        serial_number: if id.name == "MacPlay" || id.name == "NIO ET5" {std::env::var("MACPLAY_SERIAL").expect("MacPlay requires a persistent accessory serial")} else {"0123456".into()},
+        firmware_version: if id.name == "MacPlay" || id.name == "NIO ET5" {"1.2.2"} else {"1.0.0"}.into(),
         hardware_version: "1.0".into(),
         messages_sent_by_accessory: ids(&sent),
         messages_received_from_accessory: ids(RECEIVED),
