@@ -181,7 +181,7 @@ const mediaStats=setInterval(()=>{
    // Fork: in headless/zero-transcode mode, video packets arriving means
    // the stream is live (no local decode to wait for). Mark video ready
    // to avoid the connection timeout.
-   if(!videoReady && process.env.MACPLAY_HEADLESS==='1'){
+   if(!videoReady && (process.env.MACPLAY_HEADLESS==='1' || process.env.MACPLAY_NO_DECODE==='1')){
      videoReady=true
      videoDeadline.cancel()
      frameRateGuard.videoStarted()
