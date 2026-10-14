@@ -234,11 +234,31 @@ export function startWebServer(opts: WebServerOpts): http.Server {
   // TCP relay from the Rust h264 tap (h264tap.rs): length-prefixed Annex B
   // NAL units -> WebSocket binary on /h264 -> browser VideoDecoder.
   const h264Clients = new Set<net.Socket>()
+  // Fork: cache SPS/PPS to send to new browser clients (they connect after
+  // the Rust forwarder already sent config to Node)
+  let cachedSps: Buffer | null = null
+  let cachedPps: Buffer | null = null
   function broadcastH264(nal: Buffer): void {
+    // Detect SPS (type 7) / PPS (type 8) from Annex B NAL
+    if (nal.length > 4) {
+      let off = 0
+      if (nal[0] === 0 && nal[1] === 0) {
+        off = (nal[2] === 1) ? 3 : (nal[2] === 0 && nal[3] === 1 ? 4 : 0)
+      }
+      if (off > 0 && off < nal.length) {
+        const type = nal[off] & 0x1F
+        if (type === 7) cachedSps = nal
+        else if (type === 8) cachedPps = nal
+      }
+    }
     for (const sock of h264Clients) {
       if ((sock as any).destroyed) { h264Clients.delete(sock); continue }
       wsSendBinary(sock, nal)
     }
+  }
+  function sendCachedConfig(sock: net.Socket): void {
+    if (cachedSps) wsSendBinary(sock, cachedSps)
+    if (cachedPps) wsSendBinary(sock, cachedPps)
   }
   function startH264Relay(): void {
     const sock = net.connect(opts.h264Port, '127.0.0.1')
@@ -343,6 +363,10 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     if (url === '/h264') {
       // Video-only: browser WebCodecs client. No input on this socket.
       h264Clients.add(sock)
+      // Fork: send cached SPS/PPS to the new client so it can configure
+      // its decoder immediately (it connected after the Rust forwarder
+      // already sent config to Node).
+      sendCachedConfig(sock)
       const remove = () => { h264Clients.delete(sock); try { sock.destroy() } catch { /* ignore */ } }
       sock.on('error', remove)
       sock.on('close', remove)
