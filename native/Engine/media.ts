@@ -29,12 +29,19 @@ export function setVideoCallback(callback:()=>void, ratio:number) { onVideo=call
 // Fork (headless): when MACPLAY_HEADLESS=1 the Rust pipeline uses fakesink
 // (see codec sink_chain) and no native window is created or presented.
 function headless(){ return process.env.MACPLAY_HEADLESS==='1' }
+function noDecode(){ return process.env.MACPLAY_NO_DECODE==='1' }
 export function openScreenReceiver(id:number,key:Buffer):number {
  const token={};receivers.set(id,token)
  return addon.openVideoReceiver(id,key,(codec:number,atom:Buffer)=>{
   if(receivers.get(id)!==token)return
   videoGeneration++;firstFramePending=true
   if(player) addon.stop(player)
+  // Fork: zero-transcode mode uses the direct H.264 forwarder (h264direct),
+  // no GStreamer pipeline needed at all.
+  if(noDecode()){
+    player=0
+    return
+  }
   // Fork: headless mode still creates the GStreamer pipeline (for H.264
   // parsing and web forwarding), but with no native window. The Rust
   // Player::new handles MACPLAY_NO_DECODE by skipping the decoder.
