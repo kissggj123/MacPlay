@@ -854,7 +854,7 @@ struct SettingsView: View {
     @StateObject private var updates=MacPlayUpdates()
     var body:some View {
         NavigationSplitView {
-            List(Page.allCases,selection:$model.page){ item in Label(L(item.rawValue),systemImage:item.icon).tag(item) }
+            List(Page.allCases,selection:$model.page){ item in Label(item.rawValue,systemImage:item.icon).tag(item) }
                 .navigationTitle("MacPlay").navigationSplitViewColumnWidth(min:150,ideal:165,max:200)
         } detail: {
             VStack(spacing:0) {
