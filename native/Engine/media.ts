@@ -12,16 +12,66 @@ if (!fs.existsSync(gst)) {
     gst = path.join(root, 'gstreamer/macos')
   }
 }
-process.env.GST_PLUGIN_SYSTEM_PATH = ''
-process.env.GST_PLUGIN_PATH = path.join(gst,'lib/gstreamer-1.0')
-process.env.GST_PLUGIN_SCANNER = path.join(gst,'libexec/gstreamer-1.0/gst-plugin-scanner')
-// Fork: ensure the bundled GStreamer dylibs are found by the plugin scanner.
-// The scanner is a separate binary that needs DYLD path to find libgstreamer, libglib, etc.
-const gstLib = path.join(gst, 'lib')
-if (process.platform === 'darwin') {
-  const cur = process.env.DYLD_FALLBACK_LIBRARY_PATH || ''
-  if (!cur.split(':').includes(gstLib)) {
-    process.env.DYLD_FALLBACK_LIBRARY_PATH = gstLib + (cur ? ':' + cur : '')
+// Determine if the addon was compiled against Homebrew GStreamer
+let isHomebrewBuild = false
+let homebrewPrefix = ''
+const addonNodePaths = [
+  path.resolve(__dirname, 'node_modules/livi-gst-video/build/Release/gst_video.node'),
+  path.resolve(__dirname, '../node_modules/livi-gst-video/build/Release/gst_video.node'),
+  path.resolve(__dirname, '../../native/livi-gst-video/build/Release/gst_video.node'),
+]
+for (const p of addonNodePaths) {
+  if (fs.existsSync(p)) {
+    try {
+      const addonBuf = fs.readFileSync(p)
+      if (addonBuf.includes(Buffer.from('/opt/homebrew'))) {
+        isHomebrewBuild = true
+        homebrewPrefix = '/opt/homebrew'
+        break
+      } else if (addonBuf.includes(Buffer.from('/usr/local/opt/gstreamer')) || addonBuf.includes(Buffer.from('/usr/local/lib/libgstreamer'))) {
+        isHomebrewBuild = true
+        homebrewPrefix = '/usr/local'
+        break
+      }
+    } catch (_) {}
+  }
+}
+
+const bundledPluginDir = path.join(gst, 'lib/gstreamer-1.0')
+const bundledScanner = path.join(gst, 'libexec/gstreamer-1.0/gst-plugin-scanner')
+const bundledGstLib = path.join(gst, 'lib')
+
+if (!isHomebrewBuild && fs.existsSync(bundledPluginDir) && fs.readdirSync(bundledPluginDir).length > 0) {
+  process.env.GST_PLUGIN_SYSTEM_PATH = ''
+  process.env.GST_PLUGIN_PATH = bundledPluginDir
+  if (fs.existsSync(bundledScanner)) {
+    process.env.GST_PLUGIN_SCANNER = bundledScanner
+  }
+  if (process.platform === 'darwin') {
+    const cur = process.env.DYLD_FALLBACK_LIBRARY_PATH || ''
+    if (!cur.split(':').includes(bundledGstLib)) {
+      process.env.DYLD_FALLBACK_LIBRARY_PATH = bundledGstLib + (cur ? ':' + cur : '')
+    }
+  }
+} else {
+  // Homebrew build or bundled plugins missing: use Homebrew or system plugins
+  const brewPrefixes = homebrewPrefix ? [homebrewPrefix] : ['/opt/homebrew', '/usr/local']
+  let found = false
+  for (const prefix of brewPrefixes) {
+    const brewPluginDir = path.join(prefix, 'lib/gstreamer-1.0')
+    const brewScanner = path.join(prefix, 'libexec/gstreamer-1.0/gst-plugin-scanner')
+    if (fs.existsSync(brewPluginDir)) {
+      process.env.GST_PLUGIN_PATH = brewPluginDir
+      if (fs.existsSync(brewScanner)) {
+        process.env.GST_PLUGIN_SCANNER = brewScanner
+      }
+      found = true
+      break
+    }
+  }
+  if (!found) {
+    delete process.env.GST_PLUGIN_SYSTEM_PATH
+    delete process.env.GST_PLUGIN_PATH
   }
 }
 export const addon: any = require('livi-gst-video')

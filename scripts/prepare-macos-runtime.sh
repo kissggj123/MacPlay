@@ -16,7 +16,22 @@ done
 if [[ ${#NODE_SLICES[@]} == 2 ]]; then
   lipo -create "${NODE_SLICES[@]}" -output "$RUNTIME_CACHE/node-universal"
   NODE_BIN="$RUNTIME_CACHE/node-universal"
-else NODE_BIN="${NODE_SLICES[0]}"; fi
+else
+  NODE_BIN="${NODE_SLICES[0]}"
+fi
+if [[ ! -d "assets/gstreamer/macos-arm64/lib/gstreamer-1.0" ]]; then
+  echo "==> Bundled GStreamer plugins not found in assets/gstreamer/macos-arm64. Fetching prebuilt runtime..."
+  UPSTREAM_DMG="$RUNTIME_CACHE/MacPlay-1.2.2-arm64.dmg"
+  if [[ ! -f "$UPSTREAM_DMG" ]]; then
+    curl -fL --retry 3 --max-time 180 "https://github.com/Roylyl/MacPlay/releases/download/V1.2.2/MacPlay-1.2.2-arm64.dmg" -o "$UPSTREAM_DMG"
+  fi
+  MOUNT_DIR="$(mktemp -d "$RUNTIME_CACHE/macplay-mount.XXXXXX")"
+  hdiutil attach "$UPSTREAM_DMG" -mountpoint "$MOUNT_DIR" -nobrowse -readonly
+  mkdir -p assets/gstreamer/macos-arm64
+  cp -R "$MOUNT_DIR/MacPlay.app/Contents/Resources/gstreamer/macos-arm64/." assets/gstreamer/macos-arm64/
+  hdiutil detach "$MOUNT_DIR" 2>/dev/null || diskutil eject "$MOUNT_DIR" 2>/dev/null || true
+  rm -rf "$MOUNT_DIR"
+fi
 if [[ "$TARGET_ARCH" != arm64 ]]; then
   GST_VERSION="$(cat assets/gstreamer/macos-arm64/version.txt | head -1 | sed 's/[^0-9.]*//g')"
   # The bundled patched applemedia plugin currently has only an ARM slice.
