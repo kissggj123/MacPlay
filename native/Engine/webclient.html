@@ -136,12 +136,14 @@
         else if(i+3<n&&data[i+2]===0&&data[i+3]===1) scLen=4;
       }
       if(!scLen){ i++; continue; }
-      var start=i+scLen, j=start;
+      var start=i+scLen, j=start, found=false;
       while(j<n-3){
         if(data[j]===0&&data[j+1]===0&&
-           (data[j+2]===1||(j+3<n&&data[j+2]===0&&data[j+3]===1))) break;
+           (data[j+2]===1||(j+3<n&&data[j+2]===0&&data[j+3]===1))) { found=true; break; }
         j++;
       }
+      // Fork: if no next start code found, the NAL runs to the end of data
+      if(!found) j=n;
       if(j>start) units.push(data.subarray(start,j));
       i=j;
     }
