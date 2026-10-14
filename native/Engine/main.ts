@@ -176,7 +176,18 @@ try {
 let mediaTicks=0,lastCounts=[0,0]
 const mediaStats=setInterval(()=>{
  const counts:number[]=addon.mediaActivity();mediaTicks++
- if(counts[0]>0 && lastCounts[0]===0)diagnostic('first-video-packet')
+ if(counts[0]>0 && lastCounts[0]===0){
+   diagnostic('first-video-packet')
+   // Fork: in headless/zero-transcode mode, video packets arriving means
+   // the stream is live (no local decode to wait for). Mark video ready
+   // to avoid the connection timeout.
+   if(!videoReady && process.env.MACPLAY_HEADLESS==='1'){
+     videoReady=true
+     videoDeadline.cancel()
+     frameRateGuard.videoStarted()
+     log('CarPlay已连接','视频流已接收（无头模式，转发到浏览器）')
+   }
+ }
  if(counts[1]>0 && lastCounts[1]===0)diagnostic('first-audio-packet')
  if(mediaTicks%30===0){diagnostic('media-statistics',{videoPackets:counts[0],audioPackets:counts[1]});diagnostic('audio-statistics',JSON.parse(addon.audioStatistics()))}
  lastCounts=counts
