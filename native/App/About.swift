@@ -28,7 +28,7 @@ struct GitHubRelease: Decodable {
         let asset = images.first { item in architecture.contains { item.name.lowercased().contains($0) } }
             ?? images.first { $0.name.lowercased().contains("universal") }
         guard let asset, let url = URL(string: asset.browser_download_url), url.scheme == "https",
-              url.host == "github.com", url.path.hasPrefix("/Roylyl/MacPlay/releases/download/") else { return nil }
+              url.host == "github.com", url.path.hasPrefix("/kissggj123/MacPlay-CarBrowser/releases/download/") else { return nil }
         return url
     }
 }
@@ -41,7 +41,7 @@ struct GitHubRelease: Decodable {
     @Published var showPrompt = false
     @Published var exportStatus = ""
     @Published var exportDetail = ""
-    @Published var automatic = UserDefaults.standard.object(forKey: "MacPlay.automaticUpdates") as? Bool ?? true
+    @Published var automatic = UserDefaults.standard.object(forKey: "MacPlay.automaticUpdates") as? Bool ?? false // Fork: no background update checks by default (saves power/network; upstream repo isn't ours).
     private var automaticTimer:Timer?
     private var didStartupCheck=false
     func startAutomaticChecks() {
@@ -85,7 +85,7 @@ struct GitHubRelease: Decodable {
         Task {
             defer { checking = false }
             do {
-                var request = URLRequest(url: URL(string: "https://api.github.com/repos/Roylyl/MacPlay/releases?per_page=100")!)
+                var request = URLRequest(url: URL(string: "https://api.github.com/repos/kissggj123/MacPlay-CarBrowser/releases?per_page=100")!)
                 request.timeoutInterval = 15
                 request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
                 request.setValue("MacPlay/\(currentVersion)", forHTTPHeaderField: "User-Agent")
