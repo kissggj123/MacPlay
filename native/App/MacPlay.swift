@@ -31,11 +31,76 @@ struct PhoneChoice: Codable, Identifiable {
     var usb: String? = nil
 }
 
+// Fork: LAN addresses for the car browser + firewall helpers.
+func lanIPv4Addresses() -> [(name: String, address: String)] {
+    var result: [(String, String)] = []
+    var ifaddr: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
+    defer { freeifaddrs(ifaddr) }
+    var ptr: UnsafeMutablePointer<ifaddrs>? = first
+    while let p = ptr {
+        defer { ptr = p.pointee.ifa_next }
+        guard let sa = p.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+        let name = String(cString: p.pointee.ifa_name)
+        if name == "lo0" { continue }
+        var sin = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+        var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        guard inet_ntop(AF_INET, &sin.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil else { continue }
+        let ip = String(cString: buf)
+        if !result.contains(where: { $0.1 == ip }) { result.append((name, ip)) }
+    }
+    // Wi-Fi (en0) first — that's the car-hotspot interface in practice.
+    result.sort {
+        if $0.0 == "en0" && $1.0 != "en0" { return true }
+        if $1.0 == "en0" && $0.0 != "en0" { return false }
+        return $0.0 < $1.0
+    }
+    return result
+}
+
+func firewallEnabled() -> Bool? {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/libexec/ApplicationFirewall/socketfilterfw")
+    task.arguments = ["--getglobalstate"]
+    let pipe = Pipe()
+    task.standardOutput = pipe
+    task.standardError = Pipe()
+    guard (try? task.run()) != nil else { return nil }
+    task.waitUntilExit()
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    if out.localizedCaseInsensitiveContains("enabled") { return true }
+    if out.localizedCaseInsensitiveContains("disabled") { return false }
+    return nil
+}
+
+func firewallAllows(binaryPath: String) -> Bool {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/libexec/ApplicationFirewall/socketfilterfw")
+    task.arguments = ["--listapps"]
+    let pipe = Pipe()
+    task.standardOutput = pipe
+    task.standardError = Pipe()
+    guard (try? task.run()) != nil else { return false }
+    task.waitUntilExit()
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let name = (binaryPath as NSString).lastPathComponent
+    return out.contains(binaryPath) || out.components(separatedBy: .newlines).contains { $0.contains(name) && $0.localizedCaseInsensitiveContains("allow") }
+}
+
+func receiverBinaryPath() -> String? {
+    guard let resources = Bundle.main.resourceURL else { return nil }
+    let url = resources.appendingPathComponent("runtime/MacPlayReceiver.app/Contents/MacOS/MacPlayReceiver")
+    return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
+}
+
 struct PlaySettings: Codable {
     var language: String? = nil
     var autoReconnect: Bool? = nil
     var autoStartUSB: Bool? = nil
     var backgroundEnabled: Bool? = nil
+    var preventSleepWhenConnected: Bool? = nil
+    var headless: Bool? = nil
+    var zeroTranscode: Bool? = nil
     var displayID: UInt32? = nil
     var inputDevice: String? = nil
     var outputDevice: String? = nil
@@ -103,6 +168,11 @@ struct PlaySettings: Codable {
     @Published var usbDevices: [String] = []
     @Published var usbStage = "接收服务未启动"
     @Published var usbError = ""
+    // Fork: car-browser LAN info + firewall.
+    @Published var lanAddresses: [(name: String, address: String)] = []
+    @Published var firewallState = ""
+    @Published var firewallNeedsAllow = false
+    @Published var firewallWorking = false
     private let locationManager = CLLocationManager()
     private var networkRequestPending = false
     private var usbTimer: Timer?
@@ -193,6 +263,55 @@ struct PlaySettings: Codable {
         }
         if let uid=settings.inputDevice,!uid.isEmpty,!audioInputs.contains(where:{$0.id==uid}){settings.inputDevice=nil}
         if let uid=settings.outputDevice,!uid.isEmpty,!audioOutputs.contains(where:{$0.id==uid}){settings.outputDevice=nil}
+    }
+    // Fork: car-browser LAN info + firewall for the webserver port.
+    func refreshLanInfo() {
+        lanAddresses = lanIPv4Addresses()
+        guard let bin = receiverBinaryPath() else {
+            firewallState = L("找不到接收器程序")
+            firewallNeedsAllow = false
+            return
+        }
+        switch firewallEnabled() {
+        case nil:
+            firewallState = L("防火墙状态未知")
+            firewallNeedsAllow = false
+        case false:
+            firewallState = L("防火墙已关闭，无需放行")
+            firewallNeedsAllow = false
+        case true:
+            if firewallAllows(binaryPath: bin) {
+                firewallState = L("防火墙已开启 · MacPlayReceiver 已放行")
+                firewallNeedsAllow = false
+            } else {
+                firewallState = L("防火墙已开启 · 未放行（车机可能连不上）")
+                firewallNeedsAllow = true
+            }
+        }
+    }
+    func allowFirewallForReceiver() {
+        guard let bin = receiverBinaryPath(), !firewallWorking else { return }
+        firewallWorking = true
+        firewallState = L("正在请求管理员权限…")
+        DispatchQueue.global().async {
+            // socketfilterfw needs admin; osascript shows the system password dialog.
+            let script = "do shell script \"/usr/libexec/ApplicationFirewall/socketfilterfw --add " +
+                bin.replacingOccurrences(of: "\"", with: "\\\"") +
+                "\" with administrator privileges"
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e", script]
+            task.standardOutput = Pipe()
+            task.standardError = Pipe()
+            try? task.run()
+            task.waitUntilExit()
+            let ok = task.terminationStatus == 0
+            DispatchQueue.main.async {
+                self.firewallWorking = false
+                self.refreshLanInfo()
+                if !ok { self.firewallState = L("放行失败，请手动在系统设置 → 防火墙中允许") }
+            }
+        }
     }
     func applyLiveAudio() {
         let message:[String:Any]=["command":"audio","volume":settings.volume,"callVolume":settings.callVolume ?? 1,"enabled":settings.audioEnabled]
@@ -766,8 +885,52 @@ struct SettingsView: View {
                             }
                             Toggle(L("USB接入时自动启动CarPlay"),isOn:Binding(get:{model.settings.autoStartUSB ?? false},set:{model.settings.autoStartUSB=$0;model.persistPreferences();if $0 {model.startForUSBIfNeeded(model.currentUSBIDs)}}))
                             Toggle(L("允许后台运行"),isOn:Binding(get:{model.settings.backgroundEnabled ?? false},set:{model.settings.backgroundEnabled=$0;MacPlayApplicationDelegate.shared?.preferencesChanged()}))
+                            Toggle(L("CarPlay连接时防止系统休眠"),isOn:Binding(get:{model.settings.preventSleepWhenConnected ?? false},set:{model.settings.preventSleepWhenConnected=$0;model.persistPreferences()}))
+                            Text(L("连接期间阻止系统休眠（含合盖，需连接电源），显示器仍可正常熄屏。")).font(.callout).foregroundStyle(.secondary)
+                            Toggle(L("无头模式（不在Mac上显示CarPlay画面）"),isOn:Binding(get:{model.settings.headless ?? false},set:{model.settings.headless=$0;model.persistPreferences()}))
+                            Text(L("画面仅通过浏览器串流，适合车机使用。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
+                            Toggle(L("零转码模式（M1 最佳性能，需 WebCodecs 浏览器）"),isOn:Binding(get:{model.settings.zeroTranscode ?? false},set:{model.settings.zeroTranscode=$0;model.persistPreferences()}))
+                            Text(L("跳过 Mac 端视频解码，H.264 直接转发给浏览器硬解。需配合无头模式 + Chrome/Edge 类浏览器（HTTPS）。不支持 WebCodecs 时无画面。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
                             Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要MacPlay保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
                         }
+                        Section(L("车机浏览器")) {
+                            Text(L("在车机浏览器打开以下地址（Mac 与车机需在同一局域网）：")).font(.callout).foregroundStyle(.secondary)
+                            if model.lanAddresses.isEmpty {
+                                Text(L("未检测到局域网地址，请确认 Mac 已连接 Wi-Fi。")).foregroundStyle(.secondary)
+                            } else {
+                                ForEach(model.lanAddresses, id: \.address) { item in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("http://\(item.address):8080").textSelection(.enabled)
+                                            Text(item.name).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Button(L("复制")) {
+                                            NSPasteboard.general.clearContents()
+                                            NSPasteboard.general.setString("http://\(item.address):8080", forType: .string)
+                                        }
+                                    }
+                                }
+                            }
+                            HStack {
+                                Text(L("防火墙"))
+                                Spacer()
+                                Text(model.firewallState).foregroundStyle(.secondary)
+                            }
+                            if model.firewallNeedsAllow {
+                                Button(model.firewallWorking ? L("正在放行…") : L("一键放行 MacPlayReceiver")) {
+                                    model.allowFirewallForReceiver()
+                                }.disabled(model.firewallWorking)
+                                Text(L("需要管理员密码。放行后车机浏览器才能访问 8080 端口。")).font(.callout).foregroundStyle(.secondary)
+                            }
+                            HStack {
+                                Button(L("刷新地址")) { model.refreshLanInfo() }
+                                Button(L("打开防火墙设置")) {
+                                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Firewall")!)
+                                }
+                            }
+                            Text(L("局域网需放行：TCP 8080（浏览器画面/触控/音频）。iPhone 直连 CarPlay 使用系统 usbmuxd/蓝牙/Wi-Fi，走 MacPlay 自身通道。")).font(.callout).foregroundStyle(.secondary)
+                        }.onAppear { model.refreshLanInfo() }
                         if !model.settings.wireless {Section(L("USB直连")) {
                             LabeledContent(L("设备"),value:L(model.usbStatus))
                             if !model.usbDevices.isEmpty {LabeledContent(L("连接阶段"),value:L(model.usbError.isEmpty ? model.usbStage : model.usbError))}
