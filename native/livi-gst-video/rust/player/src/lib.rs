@@ -7,7 +7,7 @@ use gstreamer_base as gst_base;
 use std::sync::Once;
 
 mod webtap;
-mod h264tap;
+pub mod h264tap;
 
 static INIT: Once = Once::new();
 

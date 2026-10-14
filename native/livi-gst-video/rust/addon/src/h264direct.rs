@@ -211,9 +211,6 @@ fn forwarder() -> Arc<Mutex<Forwarder>> {
 /// its video configuration. New TCP clients receive these first.
 /// `is_hevc`: true for H.265 (hvcC), false for H.264 (avcC).
 pub fn set_codec_data(atom: &[u8], is_hevc: bool) {
-    if std::env::var_os("MACPLAY_NO_DECODE").is_none() {
-        return;
-    }
     let (config, codec) = if is_hevc {
         (parse_hvcc(atom), VideoCodec::H265)
     } else {
@@ -222,10 +219,18 @@ pub fn set_codec_data(atom: &[u8], is_hevc: bool) {
     if config.is_empty() {
         return;
     }
-    eprintln!("[h264direct] cached {} config NALs from {}",
-        config.len(), if is_hevc { "hvcC" } else { "avcC" });
-    if let Ok(mut f) = forwarder().lock() {
-        f.set_codec_config(config, codec);
+    if std::env::var_os("MACPLAY_NO_DECODE").is_some() {
+        eprintln!("[h264direct] cached {} config NALs from {}",
+            config.len(), if is_hevc { "hvcC" } else { "avcC" });
+        if let Ok(mut f) = forwarder().lock() {
+            f.set_codec_config(config, codec);
+        }
+    } else {
+        // Decode mode: the encoded-passthrough tap (WebCodecs route) also
+        // needs the config NALs — the iPhone keeps VPS/SPS/PPS in hvcC and
+        // never sends them in-band, so the parser stream alone can't configure
+        // a browser decoder.
+        livi_video_player::h264tap::stash_config(config);
     }
 }
 

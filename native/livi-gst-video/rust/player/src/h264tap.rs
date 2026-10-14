@@ -25,6 +25,23 @@ pub fn h264_port() -> Option<u16> {
     std::env::var("MACPLAY_H264_PORT").ok()?.parse().ok()
 }
 
+/// Codec config NALs (Annex B, e.g. VPS/SPS/PPS converted from hvcC) to emit
+/// before any stream NALs. The iPhone carries these in hvcC (not in-band), so
+/// without this the browser never sees them and cannot configure its decoder.
+static PENDING_CONFIG: std::sync::Mutex<Vec<Vec<u8>>> = std::sync::Mutex::new(Vec::new());
+
+/// Stash config NALs to be sent ahead of the stream. Safe to call at any
+/// time (before or after `maybe_start`).
+pub fn stash_config(nals: Vec<Vec<u8>>) {
+    if nals.is_empty() {
+        return;
+    }
+    if let Ok(mut q) = PENDING_CONFIG.lock() {
+        eprintln!("[h264tap] stashed {} config NAL(s)", nals.len());
+        q.extend(nals);
+    }
+}
+
 /// Attach to the pipeline's `h264sink` appsink and start serving. No-op
 /// unless `MACPLAY_H264_PORT` is set and the appsink exists.
 pub fn maybe_start(pipeline: &gstreamer::Pipeline) {
@@ -57,6 +74,12 @@ pub fn maybe_start(pipeline: &gstreamer::Pipeline) {
                 // emit-signals=false is already set on the appsink element in
                 // the pipeline description; pull mode needs no signals.
                 loop {
+                    // Config NALs first (iPhone keeps VPS/SPS/PPS in hvcC).
+                    if let Ok(mut q) = PENDING_CONFIG.lock() {
+                        for nal in std::mem::take(&mut *q) {
+                            let _ = tx.try_send(nal);
+                        }
+                    }
                     match appsink.try_pull_sample(gstreamer::ClockTime::from_seconds(2)) {
                         Some(sample) => {
                             let nal = sample

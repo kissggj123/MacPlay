@@ -366,6 +366,33 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       else if (type === 33) cachedSps = nal
       else if (type === 34) cachedPps = nal
     } else {
+      // Belt & braces: if the codec was misinferred from a slice NAL (the
+      // iPhone keeps HEVC VPS/SPS/PPS in hvcC, so the tap may stream a slice
+      // first — its 1-byte mask collides with H.264 types), a real HEVC
+      // config NAL corrects it. Match the exact header bytes (VPS 0x40 /
+      // SPS 0x42 / PPS 0x44 with tid=1 in the second byte) — the HEVC type
+      // arithmetic alone would false-positive on H.264 slice 0x41 (=32).
+      let hoff = 0
+      if (nal[0] === 0 && nal[1] === 0) {
+        hoff = nal[2] === 1 ? 3 : (nal[2] === 0 && nal[3] === 1 ? 4 : 0)
+      }
+      const hb = hoff > 0 ? nal[hoff] : nal[0]
+      if (
+        (hb === 0x40 || hb === 0x42 || hb === 0x44) &&
+        hoff + 1 < nal.length && (nal[hoff + 1] & 0xf8) === 0x08
+      ) {
+        videoCodec = 'h265'
+        cachedVps = cachedSps = cachedPps = null
+        console.error('[webserver] video codec corrected: h265 (HEVC config NAL)')
+        // Notify live clients so they rebuild their decoder for the new codec.
+        try {
+          const msg = JSON.stringify({ codec: 'h265' })
+          const msgBuf = Buffer.from(msg, 'utf8')
+          for (const s of [...h264Clients]) {
+            s.write(Buffer.concat([Buffer.from([0x81, msgBuf.length]), msgBuf]))
+          }
+        } catch { /* ignore */ }
+      }
       if (type === 7) cachedSps = nal
       else if (type === 8) cachedPps = nal
     }
