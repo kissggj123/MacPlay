@@ -1,5 +1,3 @@
-<p align="center"><img src="assets/icons/carplay/nio-512.png" width="104" alt="NIO Play 图标"></p>
-
 <h1 align="center">NIO Play</h1>
 
 <p align="center">iPhone → Mac → 车机浏览器：一个把 CarPlay 串流到蔚来车载大屏的浏览器里显示和操作。</p>
