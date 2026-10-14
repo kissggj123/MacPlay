@@ -327,7 +327,14 @@ impl Player {
             )
         };
 
-        let desc = describe(with_cal);
+        let mut desc = describe(with_cal);
+        // Fork: jpegenc (gst-plugins-good) is absent from the bundled runtime;
+        // avenc_mjpeg (gst-libav) ships with it. Swap the MJPEG encoder when
+        // jpegenc is not in the registry (registry is ready after gst::init).
+        if desc.contains("jpegenc") && gst::ElementFactory::find("jpegenc").is_none() {
+            eprintln!("[gst_video] jpegenc missing, using avenc_mjpeg for web tap");
+            desc = desc.replace("jpegenc quality=60", "avenc_mjpeg q=5");
+        }
         eprintln!(
             "[gst_video] window={handle:#x} codec={codec} decoder={decoder} ({}) | {desc}",
             if livi_video_codec::is_hw_decoder(decoder) { "hw" } else { "sw" }

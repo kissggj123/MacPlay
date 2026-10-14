@@ -313,15 +313,42 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     }
   }
 
+  /** Fork: infer the codec from a config NAL header. H.264 SPS/PPS start with
+   * type 7/8; HEVC VPS/SPS/PPS have a 2-byte header with type 32..34. HEVC
+   * types are checked first: an HEVC IDR byte (0x28) collides with H.264 PPS
+   * (type 8) via the 1-byte header mask. Streams always lead with config
+   * NALs, so the first inferable NAL decides reliably. */
+  function inferCodec(buf: Buffer): 'h264' | 'h265' | null {
+    if (buf.length < 5) return null
+    let off = 0
+    if (buf[0] === 0 && buf[1] === 0) {
+      off = buf[2] === 1 ? 3 : buf[2] === 0 && buf[3] === 1 ? 4 : 0
+    }
+    if (off === 0 || off + 1 >= buf.length) return null
+    const b = buf[off]
+    const t265 = (b >> 1) & 0x3f
+    if (t265 >= 32 && t265 <= 34) return 'h265'
+    const t264 = b & 0x1f
+    if (t264 === 7 || t264 === 8) return 'h264'
+    return null
+  }
+
   function broadcastH264(nal: Buffer): void {
-    // First message from Rust is 1-byte codec identifier
+    // Codec signaling differs by source: h264direct (zero-transcode) prepends
+    // a 1-byte codec identifier frame; h264tap (decode mode) streams plain
+    // Annex B — infer the codec from the first config NAL instead.
     if (!codecReceived) {
       if (nal.length === 1) {
         videoCodec = nal[0] === 1 ? 'h265' : 'h264'
         codecReceived = true
-        console.error(`[webserver] video codec: ${videoCodec}`)
+        console.error(`[webserver] video codec: ${videoCodec} (identifier)`)
+      } else {
+        const inferred = inferCodec(nal)
+        if (!inferred) return
+        videoCodec = inferred
+        codecReceived = true
+        console.error(`[webserver] video codec: ${videoCodec} (config NAL)`)
       }
-      return
     }
     // Fork: an unfixed Rust forwarder may send one start code followed by a
     // length-prefixed NAL run (whole access unit) — reframe before relaying.
