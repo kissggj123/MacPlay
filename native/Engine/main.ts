@@ -79,29 +79,53 @@ helper.on('exit',code=>{if(!stopping){log('连接后端已退出',String(code));
 // Fork: settings.json path for the web client's display changes (declared before
 // the server below so the display-persist closure can reference it).
 const settingsFile = process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'settings.json')
+// Fork: a browser-driven display change drops the live session by design; the
+// phone is expected to reconnect and renegotiate at the new resolution. Track
+// it so session-ended restarts the wait instead of shutting the engine down
+// (without this the receiver dies mid-session — 画面卡死 — and the phone
+// falls back to its own speaker).
+let displayRestartPending=false
 const server=net.createServer(socket=>{
  networkConnected=true;discovery?.networkConnected();
  socket.once('close',()=>{if(!active&&!stopping){networkConnected=false;discovery?.announce()}})
  const usbSession=wiredReady && !socket.remoteAddress?.endsWith('%'+settings.wifiInterface)
  diagnostic('control-connected',{family:socket.remoteFamily});if(!videoReady)log('收到连接请求','正在协商认证与音视频')
  const stack=new CpStack(config);sessions.add(stack)
- // Fork: persist web-requested display/codec changes so an engine restart keeps them.
+ // Fork: persist web-requested display/codec changes so an engine restart keeps them,
+ // and apply them to the live in-memory config so the NEXT session (the phone
+ // reconnects after the drop) negotiates the new resolution natively.
  stack.onDisplayChange=cfg=>{
   try{
    const cur=JSON.parse(fs.readFileSync(settingsFile,'utf8'))
    cur.width=cfg.width;cur.height=cfg.height;cur.fps=cfg.fps;cur.webCodec=cfg.codec
    fs.writeFileSync(settingsFile, JSON.stringify(cur,null,2))
   }catch(e){console.error('[engine] persist display settings failed:',(e as Error).message)}
+  try{
+   settings.width=cfg.width;settings.height=cfg.height;settings.fps=cfg.fps
+   config.main=displayConfig(settings)
+   config.hevc=cfg.codec!=='h264'
+  }catch(e){console.error('[engine] apply display settings failed:',(e as Error).message)}
+  displayRestartPending=true
  }
  stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
  stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
  stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled!==false&&browserClientCount()>0)
  stack.on('session-active',()=>{sessionReady=true;frameRateGuard.negotiationStarted();armDeadline();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);if(!videoReady)log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流');syncSleepAssertion();
   // Fork: session may come up with no browser attached (audio starts into
-  // nowhere) — pause the phone once the HID channel is ready.
-  if(browserClientCount()===0)setTimeout(()=>{if(browserClientCount()===0){try{stack.sendMedia(2)}catch{}}},1500)})
+  // nowhere) — pause the phone once the HID channel is ready. Conversely,
+  // after a resolution renegotiation (or a fresh session with the browser
+  // already open) resume playback so audio follows the display seamlessly.
+  if(browserClientCount()===0)setTimeout(()=>{if(browserClientCount()===0){try{stack.sendMedia(2)}catch{}}},1500)
+  else if(settings.audioEnabled!==false&&settings.autoResumeOnBrowser!==false)setTimeout(()=>{if(browserClientCount()>0){try{stack.sendMedia(1)}catch{}}},2000)})
  stack.on('disconnect-reason',(reason:string)=>{disconnectReason=reason})
- stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;syncSleepAssertion();log(disconnectReason,'重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
+ stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;syncSleepAssertion();
+  // Fork: a browser-driven display change intentionally drops the session so
+  // the phone renegotiates at the new resolution. Stay alive and let it
+  // reconnect — shutting down here killed the receiver mid-use (画面卡死)
+  // and pushed audio back to the iPhone speaker.
+  if(displayRestartPending&&!stopping&&hadVideo){displayRestartPending=false;log('正在应用新的显示分辨率','等待iPhone重新连接…');if(usbSession)usb('分辨率已更新，等待iPhone自动重连');return}
+  log(disconnectReason,'重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}
+  if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
  stack.on('host-ui-requested',()=>{process.stdout.write(JSON.stringify({showMain:true})+'\n');diagnostic('show-main')})
  stack.on('error',(e:Error)=>{diagnostic('session-error',e.message);if(!videoReady)log('会话错误',e.message)})
  stack.attachSocket(socket)
