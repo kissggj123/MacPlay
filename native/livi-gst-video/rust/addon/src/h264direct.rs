@@ -215,6 +215,18 @@ pub fn push_video_nal(nal: &[u8]) {
     }
 }
 
+/// Start the TCP listener if MACPLAY_NO_DECODE is set. Called once at startup.
+pub fn maybe_start() {
+    if std::env::var_os("MACPLAY_NO_DECODE").is_none() {
+        return;
+    }
+    let port: u16 = std::env::var("MACPLAY_H264_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(18083);
+    start_server(port);
+}
+
 /// Start the TCP listener. Called once at startup when MACPLAY_NO_DECODE is set.
 pub fn start_server(port: u16) {
     let fw = forwarder();
