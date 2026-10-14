@@ -963,7 +963,7 @@ struct SettingsView: View {
                 Divider()
                 HStack {
                     if model.receivingOrWaiting {Button(L("停止接收")){model.stop()}}
-                    if model.running {Button(L("显示画面")){model.showCarPlayWindow()}}
+                    if model.running {Button(L("查看日志")){NSWorkspace.shared.open(model.logURL)}}
                     Spacer()
                     Button(L(model.running ? "应用并重新连接" : "启动接收")){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
