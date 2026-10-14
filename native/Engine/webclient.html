@@ -89,6 +89,13 @@
   <h3 style="margin-top:12px">麦克风</h3>
   <div class="row"><button id="micbtn" style="flex:1">🎤 启用麦克风</button></div>
   <div class="row" style="font-size:11px;color:#888">Siri/通话时将浏览器麦克风送回 iPhone</div>
+
+  <h3 style="margin-top:12px">安全边距</h3>
+  <div class="row"><label>上</label><input type="range" id="margin-top" min="0" max="40" value="0"><span class="val" id="margin-top-v">0%</span></div>
+  <div class="row"><label>下</label><input type="range" id="margin-bottom" min="0" max="40" value="0"><span class="val" id="margin-bottom-v">0%</span></div>
+  <div class="row"><label>左</label><input type="range" id="margin-left" min="0" max="40" value="0"><span class="val" id="margin-left-v">0%</span></div>
+  <div class="row"><label>右</label><input type="range" id="margin-right" min="0" max="40" value="0"><span class="val" id="margin-right-v">0%</span></div>
+  <div class="row" style="font-size:11px;color:#888">避开刘海/系统栏遮挡，0-40%</div>
 </div>
 
 <script>
@@ -443,6 +450,28 @@
     }
     if(handled) e.preventDefault();
   });
+
+  /* ============ safe area margins (WheelPlay-style) ============ */
+  var margins={top:0,bottom:0,left:0,right:0};
+  function applyMargins(){
+    var mt=margins.top+'vh', mb=margins.bottom+'vh',
+        ml=margins.left+'vw', mr=margins.right+'vw';
+    [img,canvas].forEach(function(el){
+      el.style.top=mt; el.style.bottom=mb;
+      el.style.left=ml; el.style.right=mr;
+      el.style.width='calc(100vw - '+ml+' - '+mr+')';
+      el.style.height='calc(100vh - '+mt+' - '+mb+')';
+    });
+  }
+  ['top','bottom','left','right'].forEach(function(k){
+    var el=document.getElementById('margin-'+k), v=document.getElementById('margin-'+k+'-v');
+    el.addEventListener('input',function(){
+      margins[k]=+el.value; v.textContent=el.value+'%'; applyMargins();
+      try{ localStorage.setItem('macplay-margin-'+k, el.value); }catch(e){}
+    });
+    try{ var sv=localStorage.getItem('macplay-margin-'+k); if(sv!==null){ el.value=sv; v.textContent=sv+'%'; margins[k]=+sv; } }catch(e){}
+  });
+  applyMargins();
 
   /* ============ focus mode ============ */
   focusbtn.addEventListener('click',function(e){
