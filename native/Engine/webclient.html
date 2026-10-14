@@ -531,9 +531,25 @@
       }catch(e){ return; }
     }
     var p=audioCtx.resume();
-    if(p&&p.then) p.then(function(){ audioRunning=audioCtx.state==='running'; });
+    if(p&&p.then) p.then(function(){ audioRunning=audioCtx.state==='running'; hideTapHint(); });
     else audioRunning=audioCtx.state==='running';
   }
+  // Fork: Safari's autoplay policy only allows AudioContext.resume() inside a
+  // user gesture — resuming from the packet callback (no gesture) silently
+  // fails and the page stays muted forever. Any click/touch/key unlocks it;
+  // users tap the CarPlay UI immediately anyway.
+  var tapHint=null;
+  function showTapHint(){
+    if(tapHint||audioRunning) return;
+    tapHint=document.createElement('div');
+    tapHint.textContent='点击画面开启声音';
+    tapHint.style.cssText='position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:99;background:rgba(0,0,0,.65);color:#fff;padding:6px 14px;border-radius:16px;font-size:13px;pointer-events:none;';
+    document.body.appendChild(tapHint);
+  }
+  function hideTapHint(){ if(tapHint){ tapHint.remove(); tapHint=null; } }
+  ['click','touchend','keydown'].forEach(function(ev){
+    document.addEventListener(ev,function(){ ensureAudio(); },{passive:true});
+  });
   function gainFor(stream){
     var g=streamGains[stream];
     if(!g){ g=audioCtx.createGain(); g.connect(masterGain); streamGains[stream]=g; }
@@ -568,7 +584,7 @@
     if(muted) return;
     // retry the gesture unlock as packets arrive; drop audio while suspended
     // so nothing plays as a burst once unlocked
-    if(!audioRunning){ ensureAudio(); return; }
+    if(!audioRunning){ ensureAudio(); showTapHint(); return; }
     var frame=decodeAudioPacket(buffer); if(!frame) return;
     var now=audioCtx.currentTime;
     var delay=frame.media?0.3:0.06, maxAhead=frame.media?delay+1:0.25;
