@@ -117,15 +117,25 @@
   var useWebCodecs = window.isSecureContext && ('VideoDecoder' in window);
   // Fork (screen capture): if the server is in screencap mode, force MJPEG
   // even in a secure context (there's no H.264 stream to decode).
+  var health=null;
   try {
     var healthXhr = new XMLHttpRequest();
     healthXhr.open('GET', '/health', false); // synchronous, runs once at load
     healthXhr.send();
     if (healthXhr.status === 200) {
-      var health = JSON.parse(healthXhr.responseText);
+      health = JSON.parse(healthXhr.responseText);
       if (health.mode === 'screencap') useWebCodecs = false;
     }
   } catch (e) { /* ignore, fall back to default */ }
+  // Fork: preselect the streaming codec in the settings panel so "应用显示设置"
+  // resends what's in use unless the user changes it.
+  try {
+    if (health && health.codec) {
+      var codecSel=document.getElementById('codec');
+      if (codecSel) codecSel.value = health.codec === 'h265' ? 'hevc' : 'h264';
+      window._healthCodec = health.codec;
+    }
+  } catch (e) {}
   var canvas=document.getElementById('c'), ctx2d=null;
   var h264ws=null, videoDecoder=null, decoderConfigured=false;
   var spsPps=null, frameCount=0, bytesCount=0, lastStatTime=Date.now();
@@ -182,7 +192,8 @@
   }
 
   // Fork: PlayPort-style HEVC codec probing.
-  // Tries multiple codec strings from most specific to least specific,
+  // Tries multiple codec strings from most specific to least specific and each
+  // hardware preference (Chromium only exposes HEVC through platform decoders),
   // using VideoDecoder.isConfigSupported to find one that works.
   async function probeHevcCodec(hvcC){
     var candidates=[];
@@ -196,19 +207,20 @@
       for(var i=0;i<32;i++){ rev=((rev<<1)|(v&1))>>>0; v>>>=1; }
       var levelIdc=hvcC[12];
       var base='hvc1.'+profileSpace+profileIdc+'.'+rev.toString(16)+'.'+tier+levelIdc;
-      candidates.push({codec:base, desc:hvcC});
+      candidates.push(base);
     }
     // Fallbacks (PlayPort-style)
-    candidates.push({codec:'hvc1.1.6.L120.B0', desc:hvcC});
-    candidates.push({codec:'hvc1.1.6.L93.B0', desc:hvcC});
+    candidates.push('hvc1.1.6.L120.B0');
+    candidates.push('hvc1.1.6.L93.B0');
     for(var c of candidates){
-      try{
-        var support=await VideoDecoder.isConfigSupported({
-          codec:c.codec, description:c.desc,
-          hardwareAcceleration:'prefer-hardware'
-        });
-        if(support&&support.supported) return c;
-      }catch(e){}
+      for(var a of ['prefer-hardware', null, 'prefer-software']){
+        try{
+          var cfg={codec:c, description:hvcC};
+          if(a) cfg.hardwareAcceleration=a;
+          var support=await VideoDecoder.isConfigSupported(cfg);
+          if(support&&support.supported) return {codec:c, accel:a};
+        }catch(e){}
+      }
     }
     return null;
   }
@@ -221,24 +233,31 @@
       var best=await probeHevcCodec(hvcC);
       if(!best){
         decoderConfigured=false;
+        var w=document.getElementById('waiting');
+        if(w&&!imgShown){
+          w.innerHTML='此浏览器不支持 H.265 (HEVC) 硬件解码<br>'+
+            '请改用支持 HEVC 的浏览器(Chrome/Edge 107+ 或 Safari 17+)<br>'+
+            '或在 Mac 本机打开本页面';
+        }
         return;
       }
       try{
-        videoDecoder.configure({
-          codec:best.codec, description:best.desc,
-          optimizeForLatency:true, hardwareAcceleration:'prefer-hardware'
-        });
-        decoderConfigured=true;
+        var dcfg={codec:best.codec, description:hvcC, optimizeForLatency:true};
+        if(best.accel) dcfg.hardwareAcceleration=best.accel;
+        videoDecoder.configure(dcfg);
+        decoderConfigured=true; sawKeyAfterConfig=false; auBuf=[];
         // Fork: watchdog - request keyframe if no frames decoded in 2.5s
         armKeyframeWatchdog();
+        if(wsReady) send({t:'keyframe'}); // WebCodecs needs a key chunk first
       }catch(e){ decoderConfigured=false; }
     }else{
       var codec=codecStringFromSps(cfg.sps);
       var desc=buildAvcC(cfg.sps,cfg.pps);
       try{
         videoDecoder.configure({ codec:codec, description:desc, optimizeForLatency:true });
-        decoderConfigured=true;
+        decoderConfigured=true; sawKeyAfterConfig=false; auBuf=[];
         armKeyframeWatchdog();
+        if(wsReady) send({t:'keyframe'});
       }catch(e){ decoderConfigured=false; }
     }
   }
@@ -264,21 +283,27 @@
   function onFrameDecoded(){ framesDecodedSinceConfig++; }
 
   function buildHvcC(vps, sps, pps){
-    // Minimal hvcC: [1][profile...][arrays]
-    // For WebCodecs, we can use a simplified version
+    // hvcC record assembled from the stream's parameter sets. The general
+    // profile/tier/level is copied verbatim from the SPS (2-byte NAL header,
+    // 1 byte vpsId/sublayers/nesting, then 12 bytes of general PTL) so the
+    // record matches what the phone actually encodes.
     var vlen=vps.length, slen=sps.length, plen=pps.length;
     var len=23+3+2+vlen+3+2+slen+3+2+plen;
     var out=new Uint8Array(len), o=0;
     out[o++]=1; // configurationVersion
-    // general_profile_space(0)+tier(0)+profile_idc(1=Main)
-    out[o++]=1; out[o++]=0x60; out[o++]=0; out[o++]=0; out[o++]=0; // compat flags
-    for(var i=0;i<6;i++) out[o++]=0; // constraint flags
-    out[o++]=93; // level_idc (3.1)
+    if(sps.length>=15){
+      out.set(sps.subarray(3,15),o); o+=12; // profile, compat, constraints, level
+    }else{
+      // general_profile_space(0)+tier(0)+profile_idc(1=Main)
+      out[o++]=1; out[o++]=0x60; out[o++]=0; out[o++]=0; out[o++]=0;
+      for(var i=0;i<6;i++) out[o++]=0; // constraint flags
+      out[o++]=93; // level_idc
+    }
     out[o++]=0xF0; out[o++]=0; // min_spatial_segmentation
     out[o++]=0xFC; // parallelismType
-    out[o++]=0xFC; // chromaFormat
-    out[o++]=0xF8; // bitDepthLuma
-    out[o++]=0xF8; // bitDepthChroma
+    out[o++]=0xFD; // chromaFormat = 1 (4:2:0)
+    out[o++]=0xF8; // bitDepthLumaMinus8 = 0
+    out[o++]=0xF8; // bitDepthChromaMinus8 = 0
     out[o++]=0; out[o++]=0; // avgFrameRate
     out[o++]=0x03; // constFramerate/numLayers/nested/lengthSize
     out[o++]=3; // numOfArrays
@@ -294,27 +319,75 @@
     return out;
   }
 
-  function decodeNalUnit(nal, timestamp, codec){
-    if(!decoderConfigured) return;
-    var type, isKey;
-    if(codec==='h265'){
-      type=(nal.length>=2)?((nal[0]>>1)&0x3F):-1;
-      if(type===32||type===33||type===34) return; // skip VPS/SPS/PPS
-      // HEVC keyframes: IDR_W_RADL=19, IDR_N_LP=20
-      isKey=(type===19||type===20);
-    }else{
-      type=nal[0]&0x1F;
-      if(type===7||type===8) return; // skip SPS/PPS
-      isKey=(type===5);
+  /* Fork: access-unit assembly. WebCodecs wants one EncodedVideoChunk per
+     picture (all slices plus leading SEI, length-prefixed); feeding one chunk
+     per NAL never yields a frame. NALs buffer here until the next picture's
+     first slice (or an AUD) closes the unit. */
+  var auBuf=[], auHasKey=false, auPendingSince=0, sawKeyAfterConfig=false;
+  function nalType(nal){
+    if(videoCodec==='h265') return nal.length>=2?((nal[0]>>1)&0x3F):-1;
+    return nal.length>=1?(nal[0]&0x1F):-1;
+  }
+  function isKeyType(t){
+    // HEVC IRAP (IDR/BLA/CRA) = 16..23; H.264 IDR = 5
+    return videoCodec==='h265' ? (t>=16&&t<=23) : t===5;
+  }
+  function isFirstSlice(nal,t){
+    // slice payload opens with first_slice_segment_in_pic_flag (HEVC) /
+    // first_mb_in_slice==0 (H.264), both encoded as a set high bit
+    if(videoCodec==='h265') return t>=0&&t<32 && nal.length>=3 && (nal[2]&0x80)!==0;
+    return t>=1&&t<=5 && nal.length>=2 && (nal[1]&0x80)!==0;
+  }
+  function sameBytes(a,b){
+    if(a.length!==b.length) return false;
+    for(var i=0;i<a.length;i++) if(a[i]!==b[i]) return false;
+    return true;
+  }
+  function cacheParam(kind,nal){
+    spsPps=spsPps||{};
+    if(spsPps[kind]&&sameBytes(spsPps[kind],nal)) return;
+    spsPps[kind]=nal;
+    if(decoderConfigured) decoderConfigured=false; // params changed: reconfigure
+  }
+  function flushAu(){
+    if(!auBuf.length) return;
+    var use=auBuf, key=auHasKey;
+    auBuf=[]; auHasKey=false;
+    if(!decoderConfigured||!videoDecoder||videoDecoder.state==='closed') return;
+    if(!sawKeyAfterConfig&&!key) return; // first chunk after configure must be a key
+    if(key) sawKeyAfterConfig=true;
+    if(videoDecoder.decodeQueueSize>24&&!key){ return; } // falling behind: drop deltas
+    var total=0,i;
+    for(i=0;i<use.length;i++) total+=4+use[i].length;
+    var chunk=new Uint8Array(total),o=0;
+    for(i=0;i<use.length;i++){
+      chunk[o]=(use[i].length>>>24)&0xFF; chunk[o+1]=(use[i].length>>>16)&0xFF;
+      chunk[o+2]=(use[i].length>>>8)&0xFF; chunk[o+3]=use[i].length&0xFF;
+      chunk.set(use[i],o+4); o+=4+use[i].length;
     }
-    var chunk=new Uint8Array(4+nal.length);
-    chunk[0]=(nal.length>>>24)&0xFF; chunk[1]=(nal.length>>>16)&0xFF;
-    chunk[2]=(nal.length>>>8)&0xFF; chunk[3]=nal.length&0xFF;
-    chunk.set(nal,4);
     try{
       videoDecoder.decode(new EncodedVideoChunk({
-        type:isKey?'key':'delta', timestamp:timestamp, data:chunk }));
+        type:key?'key':'delta', timestamp:ts, data:chunk }));
+      ts+=33333;
     }catch(e){}
+  }
+  function feedNal(nal){
+    var t=nalType(nal);
+    if(videoCodec==='h265'){
+      if(t===32){ cacheParam('vps',nal); return; }
+      if(t===33){ cacheParam('sps',nal); return; }
+      if(t===34){ cacheParam('pps',nal); return; }
+      if(t===35){ flushAu(); return; } // AUD delimits pictures
+    }else{
+      if(t===7){ cacheParam('sps',nal); return; }
+      if(t===8){ cacheParam('pps',nal); return; }
+      if(t===9){ flushAu(); return; } // AUD
+    }
+    if(t<0) return;
+    if(isFirstSlice(nal,t)&&auBuf.length) flushAu();
+    if(!auBuf.length){ auHasKey=false; auPendingSince=Date.now(); }
+    if(isKeyType(t)) auHasKey=true;
+    auBuf.push(nal);
   }
 
   // Fork: WebRTC receiver, ported from WheelPlay (fython/wheelplay)
@@ -381,12 +454,9 @@
     return rtcReceiver;
   }
 
-  function startWebCodecs(){
-    // Hide WebRTC video if active
-    if(rtcReceiver){ rtcReceiver.close(); rtcReceiver=null; }
-    rtcVideo.style.display='none';
-    canvas.style.display='block'; img.style.display='none';
-    ctx2d=canvas.getContext('2d');
+  var videoCodec='h264', ts=0; // codec set from server's first text message
+
+  function makeDecoder(){
     videoDecoder=new VideoDecoder({
       output:function(frame){
         if(canvas.width!==frame.displayWidth||canvas.height!==frame.displayHeight){
@@ -398,65 +468,69 @@
         onFrameDecoded(); // Fork: PlayPort-style keyframe watchdog
       },
       error:function(e){
-        // Fork: show decoder errors on the waiting overlay for debugging
+        // Fork: recreate the decoder; a fatal error closes it for good
         var w=document.getElementById('waiting');
-        if(w) w.innerHTML='解码器错误: '+(e&&e.message?e.message:e)+'<br>请截图发给开发者';
+        if(w&&!imgShown) w.innerHTML='解码器错误: '+(e&&e.message?e.message:e)+'<br>正在重建解码器…';
+        decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+        try{ videoDecoder.close(); }catch(err){}
+        setTimeout(function(){ makeDecoder(); }, 300);
       }
     });
+  }
+
+  function startWebCodecs(){
+    // Hide WebRTC video if active
+    if(rtcReceiver){ rtcReceiver.close(); rtcReceiver=null; }
+    rtcVideo.style.display='none';
+    canvas.style.display='block'; img.style.display='none';
+    ctx2d=canvas.getContext('2d');
+    decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+    makeDecoder();
     var proto=location.protocol==='https:'?'wss':'ws';
     h264ws=new WebSocket(proto+'://'+location.host+'/h264');
     h264ws.binaryType='arraybuffer';
-    var ts=0;
-    var videoCodec='h264'; // set from server's first text message
     h264ws.onmessage=function(ev){
       // Fork: first message is JSON with codec info
       if(typeof ev.data==='string'){
         try{
           var msg=JSON.parse(ev.data);
-          if(msg.codec) videoCodec=msg.codec;
+          if(msg.codec&&msg.codec!==videoCodec){
+            videoCodec=msg.codec;
+            // a different stream needs a fresh decoder
+            spsPps=null; decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+            try{ videoDecoder.close(); }catch(e){}
+            makeDecoder();
+          }
         }catch(e){}
         return;
       }
       var data=new Uint8Array(ev.data); bytesCount+=data.length;
       var units=parseNalUnits(data);
+      for(var i=0;i<units.length;i++) feedNal(units[i]);
+      // a stalled partial access unit is flushed by age
+      if(auBuf.length&&Date.now()-auPendingSince>150) flushAu();
+      var hasConfig = videoCodec==='h265' ?
+        (spsPps&&spsPps.vps&&spsPps.sps&&spsPps.pps) :
+        (spsPps&&spsPps.sps&&spsPps.pps);
+      if(!decoderConfigured&&hasConfig){
+        try { configureDecoder(spsPps); }
+        catch(cfgErr){
+          var we=document.getElementById('waiting');
+          if(we) we.innerHTML='配置解码器失败: '+cfgErr.message;
+        }
+      }
       // Fork: debug - show received NAL stats on waiting overlay
       var w=document.getElementById('waiting');
-      for(var i=0;i<units.length;i++){
-        var nal=units[i], type;
-        if(videoCodec==='h265'){
-          // HEVC: 2-byte header, type=(b0>>1)&0x3F. VPS=32,SPS=33,PPS=34
-          type=(nal.length>=2)?((nal[0]>>1)&0x3F):-1;
-        }else{
-          // H.264: 1-byte header, type=b0&0x1F. SPS=7,PPS=8
-          type=nal[0]&0x1F;
-        }
-        if(videoCodec==='h265'){
-          if(type===32){ spsPps=spsPps||{}; spsPps.vps=nal; }
-          else if(type===33){ spsPps=spsPps||{}; spsPps.sps=nal; }
-          else if(type===34){ spsPps=spsPps||{}; spsPps.pps=nal; }
-        }else{
-          if(type===7){ spsPps=spsPps||{}; spsPps.sps=nal; }
-          else if(type===8){ spsPps=spsPps||{}; spsPps.pps=nal; }
-        }
-        var hasConfig = videoCodec==='h265' ?
-          (spsPps&&spsPps.vps&&spsPps.sps&&spsPps.pps) :
-          (spsPps&&spsPps.sps&&spsPps.pps);
-        if(!decoderConfigured&&hasConfig) {
-          try { configureDecoder(spsPps); }
-          catch(cfgErr){ if(w) w.innerHTML='配置解码器失败: '+cfgErr.message; }
-        }
-        if(w && !imgShown) {
-          var cfgStr = videoCodec==='h265' ?
-            'VPS:'+(spsPps&&spsPps.vps?'✓':'✗')+' SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗') :
-            'SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗');
-          w.innerHTML='['+videoCodec+'] 收到 NAL: type='+type+' ('+units.length+'个/包)<br>'+
-            cfgStr+
-            '<br>解码器:'+(decoderConfigured?'已配置':'未配置')+
-            '<br>已解码帧:'+frameCount;
-        }
-        decodeNalUnit(nal,ts,videoCodec);
+      if(w&&!imgShown){
+        var cfgStr = videoCodec==='h265' ?
+          'VPS:'+(spsPps&&spsPps.vps?'✓':'✗')+' SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗') :
+          'SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗');
+        w.innerHTML='['+videoCodec+'] 收到 NAL: '+units.length+'个/包<br>'+
+          cfgStr+
+          '<br>解码器:'+(decoderConfigured?'已配置':'未配置')+
+          '<br>已解码帧:'+frameCount;
       }
-      ts+=33333; updateHud('WebCodecs H.264');
+      updateHud('WebCodecs '+(videoCodec==='h265'?'H.265':'H.264'));
     };
     h264ws.onclose=function(){ setTimeout(startWebCodecs,2000); };
     h264ws.onerror=function(){ try{h264ws.close();}catch(e){} };
@@ -473,7 +547,33 @@
     setInterval(function(){ updateHud('MJPEG'); },1000);
   }
 
-  if(useWebCodecs) startWebCodecs(); else startMjpeg();
+  if (useWebCodecs) {
+    startWebCodecs();
+  } else {
+    if (!window.isSecureContext) {
+      var httpsPort = (typeof health !== 'undefined' && health && health.httpsPort) || 8443;
+      var httpsUrl = 'https://' + location.hostname + ':' + httpsPort + location.pathname + location.search;
+      var isZeroTranscode = typeof health !== 'undefined' && health && health.mode === 'zero-transcode';
+      if (waiting) {
+        waiting.innerHTML = '<div style="background:rgba(20,20,20,0.92);border:1px solid #3b82f6;border-radius:12px;padding:22px;max-width:440px;margin:auto;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,0.5);">' +
+          '<div style="font-size:20px;font-weight:bold;color:#60a5fa;margin-bottom:10px;">🔒 需使用 HTTPS 访问</div>' +
+          '<div style="font-size:14px;color:#eee;line-height:1.6;margin-bottom:16px;">' +
+          '当前使用的是 <b>HTTP</b> 协议，浏览器安全规范禁止启用 <b>WebCodecs</b> 硬件解码。<br>' +
+          (isZeroTranscode ? '<span style="color:#f59e0b;font-weight:bold;">当前处于零转码极速模式，必须使用 HTTPS。</span><br>' : '') +
+          '</div>' +
+          '<a href="' + httpsUrl + '" style="display:inline-block;background:#2563eb;color:#fff;padding:10px 24px;border-radius:8px;font-size:15px;text-decoration:none;font-weight:bold;cursor:pointer;">' +
+          '👉 点击切换至 HTTPS 模式 (' + httpsPort + '端口)' +
+          '</a>' +
+          '<div style="font-size:12px;color:#aaa;margin-top:12px;line-height:1.4;">' +
+          '首次访问如提示证书风险，点击“高级”或“详细信息”选择“继续访问”即可。' +
+          '</div>' +
+          '</div>';
+      }
+    }
+    if (typeof health === 'undefined' || !health || health.mode !== 'zero-transcode') {
+      startMjpeg();
+    }
+  }
 
   /* ============ audio mixer (per-stream GainNodes) ============ */
   var audioCtx=null, audioRunning=false;
@@ -747,7 +847,7 @@
       fps:+document.getElementById('fps').value,
       codec:document.getElementById('codec').value,
       uiscale:+document.getElementById('uiscale').value});
-    alert('显示设置已发送，CarPlay 将重连应用');
+    alert('显示设置已发送，CarPlay 会话将重启以新参数重新协商');
   });
   document.getElementById('matchwin').addEventListener('click',function(){
     var dpr=window.devicePixelRatio||1;
