@@ -1112,7 +1112,7 @@ private struct MainWindowContent: View {
     @NSApplicationDelegateAdaptor(MacPlayApplicationDelegate.self) private var delegate
     @StateObject private var model=PlayModel()
     var body:some Scene {
-        Window("NIO",id:"main") {MainWindowContent(model:model,delegate:delegate)}
+        Window("NIO Play",id:"main") {MainWindowContent(model:model,delegate:delegate)}
             .defaultSize(width:820,height:650)
             .commands {CommandGroup(replacing:.newItem){};CommandGroup(after:.appInfo){Button(L("启动接收")){model.start()};Button(L("停止接收")){model.stop()}}}
     }

@@ -73,7 +73,7 @@ cp assets/icons/mac/macplay.icns "$RES/MacPlay.icns"
 cp -R native/App/Resources/*.lproj "$RES/"
 cp -R native/App/Resources/*.lproj "$RECEIVER/Contents/Resources/"
 mkdir -p "$RES/icons"
-cp assets/icons/carplay/macplay-256.png assets/icons/carplay/macplay-512.png "$RES/icons/"
+cp assets/icons/carplay/nio-256.png assets/icons/carplay/nio-512.png "$RES/icons/"
 mkdir -p "$RES/authentication"
 cp assets/authentication/identity.pk8 assets/authentication/certificate.p7b assets/authentication/SOURCE.txt "$RES/authentication/"
 cp LICENSE NOTICE "$RES/"
@@ -84,11 +84,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
-<key>CFBundleName</key><string>NIO</string><key>CFBundleDisplayName</key><string>NIO</string>
+<key>CFBundleName</key><string>NIO Play</string><key>CFBundleDisplayName</key><string>NIO Play</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.2.2</string><key>CFBundleVersion</key><string>36</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
-<key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
+<key>NSHighResolutionCapable</key><true/>
 <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
 <key>NSBluetoothAlwaysUsageDescription</key><string>MacPlay通过Mac蓝牙与iPhone建立CarPlay连接。</string>
 <key>NSLocalNetworkUsageDescription</key><string>MacPlay通过本地网络接收iPhone的CarPlay音视频。</string>
@@ -119,5 +119,5 @@ if [[ "${1:-}" != "--app-only" ]]; then
  rm -rf build/dmg/NIO.app
  ditto "$APP" build/dmg/NIO.app
 
- hdiutil create -ov -volname NIO -srcfolder build/dmg -format UDZO "dist/NIO-1.2.2-${TARGET_ARCH}.dmg"
+ hdiutil create -ov -volname "NIO Play" -srcfolder build/dmg -format UDZO "dist/NIO-Play-1.2.2-${TARGET_ARCH}.dmg"
 fi

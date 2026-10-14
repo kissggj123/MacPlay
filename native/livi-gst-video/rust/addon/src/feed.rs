@@ -103,6 +103,8 @@ pub fn audio_out(id: u32) -> Option<Arc<AudioOut>> {
 /// 0 mutes every local sink (browser-first); anything else restores local
 /// playback while the browser tap keeps feeding regardless.
 pub fn set_all_local_volumes(level: f64) {
+    let muted = level <= 0.0;
+    livi_audio_player::store_local_muted(muted);
     for out in lock().audio.values() {
         out.player.set_local_volume(level);
     }

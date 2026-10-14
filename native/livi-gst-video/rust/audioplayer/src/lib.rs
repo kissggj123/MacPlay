@@ -70,6 +70,18 @@ fn sink_chain(cfg: &Config) -> String {
     }
 }
 
+/// Fork: persisted browser-first mute state. Applied to players created later
+/// (a CarPlay session may start while a browser client is already connected).
+static LOCAL_MUTED: AtomicBool = AtomicBool::new(false);
+
+pub fn local_muted() -> bool {
+    LOCAL_MUTED.load(Ordering::Relaxed)
+}
+
+pub fn store_local_muted(muted: bool) {
+    LOCAL_MUTED.store(muted, Ordering::Relaxed);
+}
+
 /// The whole pipeline for `cfg`. The caps go onto the appsrc afterwards, so the
 /// RFC 3640 fields keep their string types.
 ///
@@ -243,6 +255,12 @@ impl Player {
         // audioType 3 (realtime=false) is the buffered media stream.
         let webaudio_id = webaudio::maybe_register(&pipeline, !cfg.realtime);
         let local_volume = pipeline.by_name("localvol");
+        // Inherit the browser-first mute state: a CarPlay session can start
+        // while a browser client is already connected (or after it left).
+        if let Some(v) = &local_volume {
+            let start = if local_muted() { 0.0 } else { 1.0 };
+            v.set_property("volume", start);
+        }
         Some(Self {
             decoded,errors,
             pipeline,
