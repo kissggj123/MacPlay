@@ -106,7 +106,7 @@ struct PlaySettings: Codable {
     var outputDevice: String? = nil
     var callVolume: Double? = nil
     var strictPixels: Bool? = nil
-    var resolution = "1280x720"
+    var resolution = "native"
     var width = 1280
     var height = 720
     var screenPixelWidth: Int? = nil
@@ -127,7 +127,7 @@ struct PlaySettings: Codable {
     var wifiMAC = ""
     var accessPointMAC: String? = nil
     var bluetoothMAC = ""
-    var audioEnabled = true
+    var audioEnabled = false
     var volume = 1.0
 }
 
