@@ -111,11 +111,11 @@ impl Uplink {
             && let Some(browser_src) = crate::micinput::browser_mic_src()
             // The Mac source was linked by parse_launch, so its request pad
             // already exists as the selector's first sink pad.
-            && let Some(mac_pad) = selector.sink_pads().next()
+            && let Some(mac_pad) = selector.sink_pads().into_iter().next()
         {
             let browser_pad = selector.request_pad_simple("sink_%u")?;
-            pipeline.add(&browser_src)?;
-            browser_src.link(&selector)?;
+            pipeline.add(&browser_src).ok()?;
+            browser_src.link(&selector).ok()?;
             crate::micinput::register_switch(selector, mac_pad, browser_pad);
         }
 
