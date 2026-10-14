@@ -2,7 +2,7 @@
 
 <h1 align="center">NIO Play</h1>
 
-<p align="center">iPhone → Mac → 车机浏览器：把 CarPlay 串流到车载大屏的浏览器里显示和操作。</p>
+<p align="center">iPhone → Mac → 车机浏览器：一个把 CarPlay 串流到蔚来车载大屏的浏览器里显示和操作。</p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="项目许可"></a>
@@ -16,7 +16,7 @@
 
 ## 这是什么
 
-本仓库是 [MacPlay](https://github.com/Roylyl/MacPlay) 的 fork（NIO 品牌定制版），目标只有一个场景：**把 Mac 变成 CarPlay 接收器，再把画面串流到车机/平板的浏览器**。
+本仓库是 [MacPlay](https://github.com/Roylyl/MacPlay) 的 fork（因为是蔚来车主且没有安卓机），目标只有一个场景：**把 Mac 变成 CarPlay 接收器，再把画面串流到蔚来车机/任意平板的浏览器**。
 
 ```
 iPhone --(USB/无线 CarPlay)--> Mac --(局域网 http://<Mac-IP>:8080)--> 浏览器
