@@ -183,14 +183,20 @@ pub fn pipeline_desc(codec: &str, decoder: &str, cal: &str, sink_override: Optio
              pret. ! queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 leaky=downstream \
              ! {sink} \
              pret. ! queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 leaky=downstream \
-             ! appsink name=h264sink emit-signals=false max-buffers=30 drop=true sync=false",
+             ! {parser2} ! appsink name=h264sink emit-signals=false max-buffers=30 drop=true \
+             sync=false caps={caps}",
             caps = caps_for(codec).to_str().unwrap_or(""),
             parser = parser_for(codec).to_str().unwrap_or(""),
+            parser2 = parser_for(codec).to_str().unwrap_or(""),
             sink = sink_chain(sink_override),
         );
     }
     // Optional H.264 passthrough tap: split right after the parser so the
-    // browser can decode the original stream with WebCodecs.
+    // browser can decode the original stream with WebCodecs. A second parser
+    // in front of the tap appsink pins Annex B byte-stream caps: the tee's
+    // other branch (vtdec) negotiates hvcC length-prefixed buffers, which
+    // would otherwise leak into the tap and the browser would never see a
+    // start code.
     let head = if std::env::var_os("MACPLAY_H264_PORT").is_some() {
         format!(
             "appsrc name=src is-live=true do-timestamp=true format=time \
@@ -199,9 +205,11 @@ pub fn pipeline_desc(codec: &str, decoder: &str, cal: &str, sink_override: Optio
              pret. ! queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 leaky=downstream \
              ! {tail} \
              pret. ! queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 leaky=downstream \
-             ! appsink name=h264sink emit-signals=false max-buffers=30 drop=true sync=false",
+             ! {parser2} ! appsink name=h264sink emit-signals=false max-buffers=30 drop=true \
+             sync=false caps={caps}",
             caps = caps_for(codec).to_str().unwrap_or(""),
             parser = parser_for(codec).to_str().unwrap_or(""),
+            parser2 = parser_for(codec).to_str().unwrap_or(""),
             tail = tail,
         )
     } else {
