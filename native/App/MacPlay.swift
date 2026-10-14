@@ -122,6 +122,7 @@ struct PlaySettings: Codable {
     var wireless = false
     var ssid = ""
     var password = ""
+    var wifiProfiles: [String: String] = [:]
     var channel = 36
     var wifiInterface = "en0"
     var wifiMAC = ""
@@ -481,7 +482,16 @@ struct PlaySettings: Codable {
         }
         if let channel=interface.wlanChannel(){settings.channel=Int(channel.channelNumber)}
         if let ssid=interface.ssid(), !ssid.isEmpty {
-            if settings.ssid != ssid {settings.password="";passwordStatus="网络已切换，请读取或填写当前网络密码。"}
+            if settings.ssid != ssid {
+                // Fork: auto-fill password from saved WiFi profiles
+                if let savedPassword = settings.wifiProfiles[ssid], !savedPassword.isEmpty {
+                    settings.password = savedPassword
+                    passwordStatus = "已自动填入已保存的网络密码。"
+                } else {
+                    settings.password = ""
+                    passwordStatus = "网络已切换，请读取或填写当前网络密码。"
+                }
+            }
             settings.ssid=ssid
             settings.accessPointMAC=interface.bssid()
             networkStatus="已读取当前Wi-Fi名称和信道"
@@ -972,8 +982,24 @@ struct SettingsView: View {
                         if model.settings.wireless {
                             Section(L("共用Wi-Fi")) {
                                 Toggle(L("无线连接被动断开时自动重连"),isOn:Binding(get:{model.settings.autoReconnect ?? false},set:{model.setAutoReconnect($0)}))
-                                TextField(L("网络名称（SSID）"),text:Binding(get:{model.settings.ssid},set:{if model.settings.ssid != $0 {model.settings.password=""};model.settings.ssid=$0}))
-                                SecureField(L("网络密码"),text:$model.settings.password)
+                                TextField(L("网络名称（SSID）"),text:Binding(get:{model.settings.ssid},set:{
+                                    if model.settings.ssid != $0 {
+                                        // Fork: auto-fill from saved profiles when SSID changes
+                                        if let saved = model.settings.wifiProfiles[$0], !saved.isEmpty {
+                                            model.settings.password = saved
+                                        } else {
+                                            model.settings.password = ""
+                                        }
+                                    }
+                                    model.settings.ssid=$0
+                                }))
+                                SecureField(L("网络密码"),text:Binding(get:{model.settings.password},set:{
+                                    model.settings.password=$0
+                                    // Fork: save password to profile when entered
+                                    if !model.settings.ssid.isEmpty && !$0.isEmpty {
+                                        model.settings.wifiProfiles[model.settings.ssid]=$0
+                                    }
+                                }))
                                 TextField(L("网络接口"),text:$model.settings.wifiInterface)
                                 Stepper(L("信道：\(model.settings.channel)"),value:$model.settings.channel,in:1...196)
                                 HStack {
@@ -983,7 +1009,25 @@ struct SettingsView: View {
                                     Button(L("打开蓝牙设置")){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.BluetoothSettings")!)}
                                 }
                                 Text(L(model.networkStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                                if !model.passwordStatus.isEmpty {Text(L(model.passwordStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)}
+                                if !model.passwordStatus.isEmpty {Text(L(model.passwordStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                                }
+                                // Fork: saved WiFi profiles management
+                                if !model.settings.wifiProfiles.isEmpty {
+                                    DisclosureGroup(L("已保存的网络配置 (\(model.settings.wifiProfiles.count))")) {
+                                        ForEach(Array(model.settings.wifiProfiles.keys.sorted()), id: \.self) { ssid in
+                                            HStack {
+                                                Text(ssid).font(.callout)
+                                                Spacer()
+                                                if ssid == model.settings.ssid {
+                                                    Text(L("当前")).font(.caption).foregroundStyle(.green)
+                                                }
+                                                Button(L("删除")) {
+                                                    model.settings.wifiProfiles.removeValue(forKey: ssid)
+                                                }.buttonStyle(.link).foregroundStyle(.red)
+                                            }
+                                        }
+                                    }
+                                }
                                 Text(L("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为MacPlay的Wi-Fi。填写SSID与共享密码，或授权读取已保存的密码。802.1X企业Wi-Fi的用户名、个人密码或证书不能作为共享密码发送。")).font(.callout).foregroundStyle(.secondary)
                             }
                         }
