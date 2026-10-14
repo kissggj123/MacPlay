@@ -38,7 +38,10 @@ const identity=loadOrCreateIdentity()
 const icons:{widthPixels:number;heightPixels:number;data:Buffer}[]=[]
 // const icons=[256,512].map(size=>({widthPixels:size,heightPixels:size,data:fs.readFileSync(path.join(resources,'icons',`macplay-${size}.png`))}))
 const helperControl=new CpHelperSock()
-const config={deviceName:'MacPlay',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:settings.webCodec?settings.webCodec!=='h264':true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,disableAudioOutput:!settings.audioEnabled,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'MacPlay',icons,rightHandDrive:false}
+const config={deviceName:'MacPlay',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:settings.webCodec?settings.webCodec!=='h264':true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,
+ // Fork: audio defaults ON in this fork — the browser streaming mode is the
+ // point, and the local/web routing is handled dynamically (setLocalAudioMuted).
+ disableAudioOutput:settings.audioEnabled===false,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'MacPlay',icons,rightHandDrive:false}
 const sessions=new Set<CpStack>()
 let active: CpStack|undefined
 let wiredReady=false
@@ -93,7 +96,7 @@ const server=net.createServer(socket=>{
  }
  stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
  stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
- stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled)
+ stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled!==false)
  stack.on('session-active',()=>{sessionReady=true;frameRateGuard.negotiationStarted();armDeadline();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);if(!videoReady)log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流');syncSleepAssertion()})
  stack.on('disconnect-reason',(reason:string)=>{disconnectReason=reason})
  stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;syncSleepAssertion();log(disconnectReason,'重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
@@ -135,6 +138,9 @@ startWebServer({
   certDir:path.join(dataDir,'certs'),
   getStack:()=>active,
   isVideoReady:()=>videoReady,
+  // Fork: audio/mic follow the display. The car browser is the audience while
+  // it holds a /touch socket; the Mac output resumes when the last one leaves.
+  onBrowserClients:(connected)=>{ try { addon.setLocalAudioMuted(connected) } catch(e){ console.error('[audio-route]',e) } },
   // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
   // No getScreenFrame = use internal pipeline, not external screencapture.
 })
@@ -231,7 +237,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
    settings.volume=audioLevel(update.volume,settings.volume??1)
    settings.callVolume=audioLevel(update.callVolume,settings.callVolume??1)
    settings.audioEnabled=!!update.enabled
-   for(const stack of sessions){stack.setStreamVolume(3,settings.volume,0);stack.setStreamVolume(2,settings.callVolume,0);stack.setAudioActive(settings.audioEnabled)}
+   for(const stack of sessions){stack.setStreamVolume(3,settings.volume,0);stack.setStreamVolume(2,settings.callVolume,0);stack.setAudioActive(settings.audioEnabled!==false)}
   }
  } catch {}
  if(line.startsWith('media ')){const index=Number(line.slice(6));if(Number.isInteger(index)&&index>=1&&index<=5)active?.sendMedia(index)}

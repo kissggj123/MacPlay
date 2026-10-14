@@ -44,10 +44,18 @@ pub(crate) fn source_device_property() -> &'static str {
 
 /// The capture chain. Opus is encoded here, PCM leaves as raw samples.
 pub fn pipeline_desc(cfg: &UplinkConfig) -> String {
-    let source = if cfg!(target_os = "macos") {
+    // Fork (web mic): in web mode the Mac source goes through an
+    // input-selector; micinput.rs attaches a browser-mic appsrc to the second
+    // pad post-parse and flips the active pad live as clients connect.
+    let mac_src = if cfg!(target_os = "macos") {
         format!("osxaudiosrc name={SOURCE_NAME}")
     } else {
         format!("pulsesrc name={SOURCE_NAME}")
+    };
+    let source = if std::env::var_os("MACPLAY_WEB_PORT").is_some() {
+        format!("{mac_src} ! input-selector name=mic-sel")
+    } else {
+        mac_src
     };
 
     let rate = cfg.sample_rate;
@@ -93,6 +101,22 @@ impl Uplink {
         if let Some(device) = &cfg.device {
             let source = pipeline.by_name(SOURCE_NAME)?;
             source.set_property(source_device_property(), device.as_str());
+        }
+
+        // Fork (web mic): wire the browser-mic appsrc to the selector's second
+        // pad. micinput.rs flips the active pad as browser mic clients connect
+        // and disconnect, so Siri/calls switch between car and Mac mic live.
+        if std::env::var_os("MACPLAY_WEB_PORT").is_some()
+            && let Some(selector) = pipeline.by_name("mic-sel")
+            && let Some(browser_src) = crate::micinput::browser_mic_src()
+            // The Mac source was linked by parse_launch, so its request pad
+            // already exists as the selector's first sink pad.
+            && let Some(mac_pad) = selector.sink_pads().next()
+        {
+            let browser_pad = selector.request_pad_simple("sink_%u")?;
+            pipeline.add(&browser_src)?;
+            browser_src.link(&selector)?;
+            crate::micinput::register_switch(selector, mac_pad, browser_pad);
         }
 
         let sink = pipeline.by_name("out")?.downcast::<gst_app::AppSink>().ok()?;
@@ -182,6 +206,7 @@ impl Uplink {
 impl Drop for Uplink {
     fn drop(&mut self) {
         self.live.store(false,Ordering::Release);
+        crate::micinput::unregister_switch();
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 }

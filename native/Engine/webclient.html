@@ -555,7 +555,10 @@
   }
   var audioStreams=new Map(), audioNodes=new Set();
   function playAudioPacket(buffer){
-    if(muted||!audioRunning) return;
+    if(muted) return;
+    // retry the gesture unlock as packets arrive; drop audio while suspended
+    // so nothing plays as a burst once unlocked
+    if(!audioRunning){ ensureAudio(); return; }
     var frame=decodeAudioPacket(buffer); if(!frame) return;
     var now=audioCtx.currentTime;
     var delay=frame.media?0.3:0.06, maxAhead=frame.media?delay+1:0.25;

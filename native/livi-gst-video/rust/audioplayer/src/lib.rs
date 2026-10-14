@@ -83,11 +83,19 @@ pub fn pipeline_desc(cfg: &Config) -> String {
         None => String::new(),
     };
     let tail = if std::env::var_os("MACPLAY_WEB_PORT").is_some() {
-        "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
-         ! tee name=at \
-         at. ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream \
-         ! appsink name=webaudio emit-signals=false max-buffers=8 drop=true sync=false"
-            .to_owned()
+        // Fork: dual output. The web tap always feeds the car browser; the
+        // local sink survives behind a `localvol` mute so the Mac plays only
+        // while no browser client is connected (browser-first routing, the
+        // level is flipped from JS via set_local_audio_muted).
+        format!(
+            "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 \
+             ! tee name=at \
+             at. ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! appsink name=webaudio emit-signals=false max-buffers=8 drop=true sync=false \
+             at. ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! volume name=localvol volume=0.0 ! {sink}",
+            sink = sink_chain(cfg),
+        )
     } else {
         format!(
             "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 ! \
@@ -123,6 +131,8 @@ pub struct Player {
     payload_type: u8,
     /// Fork (web audio): tap id in webaudio.rs, if the web tap is active.
     webaudio_id: Option<u32>,
+    /// Fork: local-output mute element (`localvol`), present only in web mode.
+    local_volume: Option<gst::Element>,
 }
 
 impl Player {
@@ -232,6 +242,7 @@ impl Player {
         // No-op unless MACPLAY_WEB_PORT is set (see webaudio.rs).
         // audioType 3 (realtime=false) is the buffered media stream.
         let webaudio_id = webaudio::maybe_register(&pipeline, !cfg.realtime);
+        let local_volume = pipeline.by_name("localvol");
         Some(Self {
             decoded,errors,
             pipeline,
@@ -243,7 +254,16 @@ impl Player {
             codec: cfg.codec,
             payload_type: cfg.payload_type,
             webaudio_id,
+            local_volume,
         })
+    }
+
+    /// Fork: 0 mutes the Mac speakers (browser is the audience), anything else
+    /// lets the CarPlay audio out locally. No-op outside web mode.
+    pub fn set_local_volume(&self, level: f64) {
+        if let Some(v) = &self.local_volume {
+            v.set_property("volume", level.clamp(0.0, 10.0));
+        }
     }
 
     pub fn statistics(&self) -> (u64,u64) {(self.decoded.load(Ordering::Relaxed),self.errors.load(Ordering::Relaxed))}

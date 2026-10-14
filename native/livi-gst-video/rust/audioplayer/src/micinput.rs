@@ -15,6 +15,7 @@
 use std::io::Read;
 use std::net::TcpListener;
 use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -22,6 +23,53 @@ use gstreamer_app as gst_app;
 
 const MAGIC: u32 = 0x31415057;
 const MIC_STREAM: i32 = -1;
+
+/// Fork: true while a browser microphone client is connected. The uplink
+/// pipeline's input-selector follows this so Siri/calls use the car mic in
+/// the browser and fall back to the Mac mic otherwise.
+static BROWSER_MIC_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn browser_mic_active() -> bool {
+    BROWSER_MIC_ACTIVE.load(Ordering::Relaxed)
+}
+
+/// The uplink pipeline's input-selector plus its two source pads. Registered
+/// when the uplink is built; flips live as browser mic clients come and go.
+struct MicSwitch {
+    selector: gst::Element,
+    mac_pad: gst::Pad,
+    browser_pad: gst::Pad,
+}
+static MIC_SWITCH: OnceLock<Mutex<Option<MicSwitch>>> = OnceLock::new();
+
+fn mic_switch() -> &'static Mutex<Option<MicSwitch>> {
+    MIC_SWITCH.get_or_init(|| Mutex::new(None))
+}
+
+/// Called from the uplink when the selector wiring is ready.
+pub fn register_switch(selector: gst::Element, mac_pad: gst::Pad, browser_pad: gst::Pad) {
+    let mut guard = mic_switch().lock().unwrap();
+    // Start from the current truth (the browser may already be connected).
+    let start_browser = BROWSER_MIC_ACTIVE.load(Ordering::Relaxed);
+    let _ = selector.set_property("active-pad", if start_browser { &browser_pad } else { &mac_pad });
+    *guard = Some(MicSwitch { selector, mac_pad, browser_pad });
+}
+
+/// Called from the uplink when its pipeline stops.
+pub fn unregister_switch() {
+    mic_switch().lock().unwrap().take();
+}
+
+fn set_browser_mic_active(on: bool) {
+    BROWSER_MIC_ACTIVE.store(on, Ordering::Relaxed);
+    if let Ok(guard) = mic_switch().lock() {
+        if let Some(sw) = guard.as_ref() {
+            let pad = if on { &sw.browser_pad } else { &sw.mac_pad };
+            let _ = sw.selector.set_property("active-pad", pad);
+            eprintln!("[mic] source -> {}", if on { "browser" } else { "mac" });
+        }
+    }
+}
 
 fn mic_port() -> u16 {
     std::env::var("MACPLAY_MIC_PORT")
@@ -62,6 +110,7 @@ pub fn start_mic_server() {
                     Ok(s) => s,
                     Err(_) => continue,
                 };
+                set_browser_mic_active(true);
                 std::thread::spawn(move || {
                     let mut buf = vec![0u8; 4];
                     loop {
@@ -80,6 +129,7 @@ pub fn start_mic_server() {
                             let _ = tx.try_send(frame[20..].to_vec());
                         }
                     }
+                    set_browser_mic_active(false);
                 });
             }
         });

@@ -49,6 +49,10 @@ export interface WebServerOpts {
   // Fork: current video codec in use, so a display request without an explicit
   // codec (e.g. "匹配本窗口像素") keeps streaming codec unchanged.
   currentVideoCodec?: () => 'h264' | 'h265'
+  // Fork: a car browser connected/disconnected (/touch WS). Audio and mic
+  // follow the display: while true the Mac local output is muted and the
+  // browser mic takes over the CarPlay input when the browser opens one.
+  onBrowserClients?: (connected: boolean) => void
   // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
   // The pipeline taps decoded frames directly via MACPLAY_WEB_PORT.
 }
@@ -224,6 +228,22 @@ export function startWebServer(opts: WebServerOpts): http.Server {
   const optsWithCodec: WebServerOpts = { ...opts, currentVideoCodec: () => videoCodec }
   // Connected browser WebSockets; PCM audio frames are broadcast to all.
   const wsClients = new Set<net.Socket>()
+  // Fork: audio/mic follow the display. A connected /touch client means the
+  // car browser is the audience; the Mac local output is muted while true and
+  // restored ~2s after the last client leaves (page refresh tolerance).
+  let browserLinger: NodeJS.Timeout | null = null
+  function notifyBrowserClients(): void {
+    if (!opts.onBrowserClients) return
+    if (wsClients.size > 0) {
+      if (browserLinger) { clearTimeout(browserLinger); browserLinger = null }
+      opts.onBrowserClients(true)
+    } else if (!browserLinger) {
+      browserLinger = setTimeout(() => {
+        browserLinger = null
+        if (wsClients.size === 0) opts.onBrowserClients?.(false)
+      }, 2000)
+    }
+  }
   function broadcastAudio(frame: Buffer): void {
     for (const sock of wsClients) {
       if ((sock as any).destroyed) { wsClients.delete(sock); continue }
@@ -533,7 +553,12 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       return
     }
     wsClients.add(sock)
-    const remove = () => { wsClients.delete(sock); try { sock.destroy() } catch { /* ignore */ } }
+    notifyBrowserClients()
+    const remove = () => {
+      if (!wsClients.delete(sock)) return
+      try { sock.destroy() } catch { /* ignore */ }
+      notifyBrowserClients()
+    }
     const parser = new WsParser(
       sock,
       (text) => {
