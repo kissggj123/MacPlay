@@ -249,7 +249,11 @@
         // Fork: watchdog - request keyframe if no frames decoded in 2.5s
         armKeyframeWatchdog();
         if(wsReady) send({t:'keyframe'}); // WebCodecs needs a key chunk first
-      }catch(e){ decoderConfigured=false; }
+      }catch(e){ 
+        decoderConfigured=false; 
+        var w=document.getElementById('waiting');
+        if(w) w.innerHTML='解码器配置失败: '+(e&&e.message?e.message:e)+'<br>codec='+best.codec;
+      }
     }else{
       var codec=codecStringFromSps(cfg.sps);
       var desc=buildAvcC(cfg.sps,cfg.pps);
