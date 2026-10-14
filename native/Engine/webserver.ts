@@ -84,7 +84,18 @@ function wsSendText(socket: net.Socket, text: string): void {
 }
 
 /** Server -> client unmasked binary frame (wheelplay PCM audio). */
+// Fork: backpressure guard — a stalled browser (car screen off, WiFi roaming)
+// stops reading TCP; without a cap the kernel buffer grows for minutes and the
+// stream "plays" far behind reality (looks like a freeze). Once a client has
+// 8MB accepted-but-unsent, drop it; the browser reconnects in 2s and resumes
+// cleanly from the next keyframe/config NALs.
+const wsPending = new WeakMap<net.Socket, number>()
+const WS_PENDING_LIMIT = 8 * 1024 * 1024
+function wsTrackDrain(socket: net.Socket): void {
+  socket.on('drain', () => wsPending.delete(socket))
+}
 function wsSendBinary(socket: net.Socket, data: Buffer): void {
+  if ((socket as any).destroyed) return
   let header: Buffer
   if (data.length < 126) {
     header = Buffer.from([0x82, data.length])
@@ -99,7 +110,19 @@ function wsSendBinary(socket: net.Socket, data: Buffer): void {
     header[1] = 127
     header.writeBigUInt64BE(BigInt(data.length), 2)
   }
-  try { socket.write(Buffer.concat([header, data])) } catch { /* ignore */ }
+  const full = Buffer.concat([header, data])
+  try {
+    if (!socket.write(full)) {
+      const pending = (wsPending.get(socket) ?? 0) + full.length
+      if (pending > WS_PENDING_LIMIT) {
+        console.log('[webserver] slow client dropped,', pending, 'bytes queued')
+        wsPending.delete(socket)
+        try { socket.destroy() } catch { /* ignore */ }
+        return
+      }
+      wsPending.set(socket, pending)
+    }
+  } catch { /* ignore */ }
 }
 
 /** Minimal client-frame parser: masked text/binary, ping/pong, close. */
@@ -548,6 +571,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     if (url === '/h264') {
       // Video-only: browser WebCodecs client. No input on this socket.
       h264Clients.add(sock)
+      wsTrackDrain(sock)
       // Fork: send cached SPS/PPS to the new client so it can configure
       // its decoder immediately (it connected after the Rust forwarder
       // already sent config to Node).
@@ -561,6 +585,9 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     }
     wsClients.add(sock)
     notifyBrowserClients()
+    wsTrackDrain(sock)
+    // Fork: inbound-activity timestamp for the dead-connection sweeper below.
+    ;(sock as any).lastSeen = Date.now()
     const remove = () => {
       if (!wsClients.delete(sock)) return
       try { sock.destroy() } catch { /* ignore */ }
@@ -569,16 +596,34 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     const parser = new WsParser(
       sock,
       (text) => {
+        ;(sock as any).lastSeen = Date.now()
         if (text.includes('"ping"')) { wsSendText(sock, JSON.stringify({ t: 'pong' })); return }
         handleTouchMessage(text, optsWithCodec)
       },
-      (bin) => { forwardMic(bin) },
+      (bin) => { (sock as any).lastSeen = Date.now(); forwardMic(bin) },
       remove,
     )
     sock.on('data', (c: Buffer) => parser.feed(c))
     sock.on('error', remove)
     sock.on('close', remove)
   })
+
+  // Fork: dead-connection sweeper. A car browser that vanished without a TCP
+  // close (screen off, WiFi drop) lingers in wsClients forever and keeps
+  // browserClientCount()>0 — freezing the audio-follow/HID state. Probe every
+  // 20s; a live client answers {t:'pong'} (refreshing lastSeen); 45s of
+  // silence means the socket is a half-open zombie — destroy it.
+  setInterval(() => {
+    for (const sock of [...wsClients]) {
+      if ((sock as any).destroyed) { wsClients.delete(sock); continue }
+      if (Date.now() - ((sock as any).lastSeen ?? 0) > 45000) {
+        console.log('[webserver] stale touch client dropped (no pong)')
+        try { sock.destroy() } catch { /* ignore */ }
+        continue
+      }
+      wsSendText(sock, JSON.stringify({ t: 'ping' }))
+    }
+  }, 20000).unref?.()
 
   // Fork: HTTPS for WebCodecs (requires secure context). Self-signed cert
   // generated once via openssl, stored in certDir. The car browser will show

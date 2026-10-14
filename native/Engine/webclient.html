@@ -646,7 +646,9 @@
     ws.onclose=function(){ wsReady=false; setTimeout(connect,2000); };
     ws.onerror=function(){ try{ws.close();}catch(e){} };
     ws.onmessage=function(ev){
-      if(typeof ev.data!=='string') playAudioPacket(ev.data);
+      if(typeof ev.data!=='string'){ playAudioPacket(ev.data); return; }
+      // Fork: answer the server's dead-connection probe.
+      try{ var m=JSON.parse(ev.data); if(m&&m.t==='ping'){ send({t:'pong'}); return; } }catch(e){}
     };
   }
   connect();
