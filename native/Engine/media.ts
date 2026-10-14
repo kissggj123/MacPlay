@@ -15,6 +15,15 @@ if (!fs.existsSync(gst)) {
 process.env.GST_PLUGIN_SYSTEM_PATH = ''
 process.env.GST_PLUGIN_PATH = path.join(gst,'lib/gstreamer-1.0')
 process.env.GST_PLUGIN_SCANNER = path.join(gst,'libexec/gstreamer-1.0/gst-plugin-scanner')
+// Fork: ensure the bundled GStreamer dylibs are found by the plugin scanner.
+// The scanner is a separate binary that needs DYLD path to find libgstreamer, libglib, etc.
+const gstLib = path.join(gst, 'lib')
+if (process.platform === 'darwin') {
+  const cur = process.env.DYLD_FALLBACK_LIBRARY_PATH || ''
+  if (!cur.split(':').includes(gstLib)) {
+    process.env.DYLD_FALLBACK_LIBRARY_PATH = gstLib + (cur ? ':' + cur : '')
+  }
+}
 export const addon: any = require('livi-gst-video')
 export const VIDEO_PLANE_MAIN = 1, VIDEO_PLANE_CLUSTER_RECV = 2
 export type CpAudioCodec = 'aac-lc'|'opus'|'pcm'
