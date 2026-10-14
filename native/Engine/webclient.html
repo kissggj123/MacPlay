@@ -300,9 +300,8 @@
     if(codec==='h265'){
       type=(nal.length>=2)?((nal[0]>>1)&0x3F):-1;
       if(type===32||type===33||type===34) return; // skip VPS/SPS/PPS
-      // HEVC keyframes: BLA (16,17,18), IDR (19,20), CRA (21)
-      // The iPhone sends CRA/BLA, not just IDR!
-      isKey=(type>=16&&type<=21);
+      // HEVC keyframes: IDR_W_RADL=19, IDR_N_LP=20
+      isKey=(type===19||type===20);
     }else{
       type=nal[0]&0x1F;
       if(type===7||type===8) return; // skip SPS/PPS
