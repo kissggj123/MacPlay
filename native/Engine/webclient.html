@@ -776,27 +776,22 @@
     alert('已按本窗口物理像素 ('+w+'×'+h+') 请求重连');
   });
 
-  /* ============ auto fit: report window pixels to the Mac ============ */
-  // Send the browser window's physical pixel size whenever it changes so the
-  // CarPlay stream is renegotiated at the native resolution of the display
-  // (head unit) showing it. Debounced: each change restarts the session.
-  var fitTimer=null, lastFit='';
+  /* ============ auto fit: negotiate once at page load ============ */
+  // The canvas already scales seamlessly with the window via CSS
+  // (100vw/100vh + object-fit:contain), like a fullscreen video. The stream
+  // resolution is only worth matching to the window ONCE, here at load time,
+  // because changing it renegotiates the CarPlay session (visible restart).
+  // Resizes after that are pure CSS — no renegotiation, no hiccup.
+  var sentFit=false;
   function sendFit(){
+    if(sentFit) return;
     var dpr=window.devicePixelRatio||1;
     var w=Math.round(window.innerWidth*dpr), h=Math.round(window.innerHeight*dpr);
     if(w<320||h<240) return;
-    var key=w+'x'+h+'@'+dpr;
-    if(key===lastFit) return;
-    lastFit=key;
+    sentFit=true;
     send({t:'display', width:w, height:h, matchWindow:true});
   }
-  function scheduleFit(){
-    if(fitTimer) clearTimeout(fitTimer);
-    fitTimer=setTimeout(sendFit,1200);
-  }
-  window.addEventListener('resize',scheduleFit);
-  window.addEventListener('orientationchange',scheduleFit);
-  // First report once the control channel is up; then keep tracking.
+  // First report once the control channel is up.
   var origConnect=connect;
   connect=function(){
     origConnect();
