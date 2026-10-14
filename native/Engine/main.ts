@@ -14,6 +14,7 @@ import { FrameRateFallback, VideoWaitDeadline } from './frameRateFallback'
 import { acceptsPhone } from './phoneSelection'
 import { audioLevel, disconnectedAfterSession } from './runtimeControls'
 import { startWebServer } from './webserver'
+import { startScreenCapture, stopScreenCapture, getLatestFrame, isCapturing } from './screencap'
 
 const resources=process.env.MACPLAY_RESOURCES!
 const settings=JSON.parse(fs.readFileSync(process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'settings.json'),'utf8'))
@@ -52,7 +53,7 @@ const frameRateGuard=new FrameRateFallback(settings.fps,fps=>{
 addon.macplaySelectDisplayOptions(settings.displayID||0)
 addon.macplaySetWindowLanguage(process.env.MACPLAY_LANGUAGE||'system')
 addon.macplayConfigureWindowOptions(settings.width,settings.height,settings.screenPixelWidth,settings.screenPixelHeight,settings.resolution==='native',settings.strictPixels===true)
-setVideoCallback(()=>{frameRateGuard.videoStarted();videoDeadline.cancel();const firstVideo = !videoReady;videoReady=true;if(firstVideo&&process.env.MACPLAY_HEADLESS!=='1')process.stdout.write(JSON.stringify({showCarPlay:true})+'\n');if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('CarPlay已连接','首帧已解码，CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
+setVideoCallback(()=>{frameRateGuard.videoStarted();videoDeadline.cancel();const firstVideo = !videoReady;videoReady=true;syncScreenCapture();if(firstVideo&&process.env.MACPLAY_HEADLESS!=='1')process.stdout.write(JSON.stringify({showCarPlay:true})+'\n');if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('CarPlay已连接','首帧已解码，CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
 const authDir=path.join(dataDir,'authentication')
 if (!fs.existsSync(path.join(authDir,'identity.pk8')) || !fs.existsSync(path.join(authDir,'certificate.p7b'))) {
  log('缺少认证文件','请在关于页面打开认证目录，放入有使用权限的配套文件。');process.exit(2)
@@ -111,6 +112,24 @@ process.env.MACPLAY_WEB_PORT ||= '18081'
 process.env.MACPLAY_WEB_AUDIO_PORT ||= '18082'
 process.env.MACPLAY_H264_PORT ||= '18083'
 process.env.MACPLAY_MIC_PORT ||= '18084'
+// Fork (screen capture): when settings.screenCapture is true, capture the
+// native CarPlay window with macOS screencapture and serve it as MJPEG.
+// This is the fallback when H.265/WebCodecs passthrough can't be used.
+// The native window must exist (NOT headless) for capture to work.
+function screenCaptureEnabled(): boolean {
+  try {
+    return JSON.parse(fs.readFileSync(settingsFile,'utf8')).screenCapture === true
+  } catch { return false }
+}
+function syncScreenCapture(): void {
+  const want = !stopping && screenCaptureEnabled() && videoReady
+  if (want && !isCapturing()) {
+    startScreenCapture()
+  } else if (!want && isCapturing()) {
+    // Keep capturing while video is live; stop on disconnect.
+    if (!videoReady) stopScreenCapture()
+  }
+}
 startWebServer({
   httpPort:Number(process.env.MACPLAY_WEB_HTTP_PORT||'8080'),
   httpsPort:Number(process.env.MACPLAY_WEB_HTTPS_PORT||'8443'),
@@ -121,6 +140,8 @@ startWebServer({
   certDir:path.join(dataDir,'certs'),
   getStack:()=>active,
   isVideoReady:()=>videoReady,
+  // Fork (screen capture): serve MJPEG from the captured window when enabled.
+  getScreenFrame: screenCaptureEnabled() ? getLatestFrame : undefined,
 })
 // Fork: optional no-sleep while CarPlay is connected
 // (settings: preventSleepWhenConnected, toggled in the app's settings UI).
@@ -170,7 +191,7 @@ try {
   fs.watch(settingsFile, (event) => {
     if (event !== 'change') return
     clearTimeout(sleepWatchTimer)
-    sleepWatchTimer = setTimeout(()=>{syncSleepAssertion();syncHeadlessEnv()}, 500)
+    sleepWatchTimer = setTimeout(()=>{syncSleepAssertion();syncHeadlessEnv();syncScreenCapture()}, 500)
   })
 } catch { /* settings file may not exist yet */ }
 let mediaTicks=0,lastCounts=[0,0]
@@ -224,5 +245,5 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 })
 const startupDeadline=setTimeout(()=>{if(!stopping&&!videoReady){disconnectReason='连接启动超时';diagnostic('handoff-summary',discovery?.summary());log(disconnectReason);process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}},90000)
 let stopping=false
-function shutdown(){if(stopping)return;stopping=true;syncSleepAssertion();discovery?.destroy();clearTimeout(startupDeadline);videoDeadline.cancel();frameRateGuard.cancel();clearInterval(pump);clearInterval(mediaStats);for(const s of sessions)s.stop();addon.macplayCloseVideoWindow();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
+function shutdown(){if(stopping)return;stopping=true;syncSleepAssertion();stopScreenCapture();discovery?.destroy();clearTimeout(startupDeadline);videoDeadline.cancel();frameRateGuard.cancel();clearInterval(pump);clearInterval(mediaStats);for(const s of sessions)s.stop();addon.macplayCloseVideoWindow();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);process.stdin.on('end',shutdown)
