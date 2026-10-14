@@ -147,7 +147,9 @@ pub fn pipeline_desc(codec: &str, decoder: &str, cal: &str, sink_override: Optio
     // into an appsink named `h264sink`, consumed by player/src/h264tap.rs.
     // The browser decodes it with WebCodecs — zero re-encode, full quality.
     // Unset (default): byte-identical pipeline to upstream.
-    let tail = if std::env::var_os("MACPLAY_WEB_PORT").is_some() {
+    let tail = if std::env::var_os("MACPLAY_WEB_PORT").is_some()
+        && std::env::var_os("MACPLAY_WEB_NO_MJPEG").is_none()
+    {
         format!(
             "{decoder} name=dec ! tee name=t \
              t. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream \

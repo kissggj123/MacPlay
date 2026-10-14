@@ -333,7 +333,9 @@ impl Player {
         // jpegenc is not in the registry (registry is ready after gst::init).
         if desc.contains("jpegenc") && gst::ElementFactory::find("jpegenc").is_none() {
             eprintln!("[gst_video] jpegenc missing, using avenc_mjpeg for web tap");
-            desc = desc.replace("jpegenc quality=60", "avenc_mjpeg q=5");
+            // avenc_mjpeg has no `quality` property; qmin/qmax drive MJPEG
+            // quality (2 = best, 31 = worst).
+            desc = desc.replace("jpegenc quality=60", "avenc_mjpeg qmin=2 qmax=4");
         }
         eprintln!(
             "[gst_video] window={handle:#x} codec={codec} decoder={decoder} ({}) | {desc}",
@@ -358,9 +360,24 @@ impl Player {
             return Some(p);
         }
         if web_enabled {
-            eprintln!("[gst_video] web-tap pipeline failed, retrying without it");
-            // pipeline_desc keys the tee branch off this env var; drop it for
-            // the retry, then restore.
+            // Retry 1: keep the encoded-passthrough tap (pret/h264sink — the
+            // WebCodecs route) but drop the MJPEG branch, which depends on a
+            // JPEG encoder the bundled runtime may lack.
+            eprintln!("[gst_video] web-tap pipeline failed, retrying without MJPEG branch");
+            // SAFETY: single-threaded at pipeline setup; no other thread reads this var yet.
+            unsafe {
+                std::env::set_var("MACPLAY_WEB_NO_MJPEG", "1");
+            }
+            let no_mjpeg = describe(with_cal);
+            // SAFETY: see above.
+            unsafe {
+                std::env::remove_var("MACPLAY_WEB_NO_MJPEG");
+            }
+            if let Some(p) = try_launch(&no_mjpeg) {
+                return Some(p);
+            }
+            // Retry 2: drop the whole web tap.
+            eprintln!("[gst_video] retrying without the web tap");
             let saved = std::env::var_os("MACPLAY_WEB_PORT");
             // SAFETY: single-threaded at pipeline setup; no other thread reads this var yet.
             unsafe {
