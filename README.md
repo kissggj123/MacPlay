@@ -27,7 +27,7 @@
 
 ### 使用条件
 
-- macOS14及以上，AppleSilicon或Intel处理器。
+- macOS 14 及以上，Apple Silicon（M 系列）处理器。**目前仅提供 ARM64 构建，Intel 机型需自行从源码编译。**
 - 支持CarPlay的iPhone；有线需要USB数据线，无线需要蓝牙与允许设备互访的共用Wi-Fi。
 - 安装包内置Node.js与GStreamer运行组件，无需额外安装开发工具。
 
