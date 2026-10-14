@@ -168,10 +168,10 @@ function handleTouchMessage(raw: string, opts: WebServerOpts): void {
   // The browser asks for a keyframe when its decoder is stalled.
   if (msg && msg.t === 'keyframe') {
     const stack = opts.getStack()
-    if (stack && typeof (stack as any).requestKeyframe === 'function') {
-      try { (stack as any).requestKeyframe() } catch { /* ignore */ }
+    if (stack && typeof (stack as any).forceMainKeyframe === 'function') {
+      try { (stack as any).forceMainKeyframe() } catch { /* ignore */ }
     } else {
-      console.error('[webserver] keyframe requested but CpStack has no requestKeyframe()')
+      console.error('[webserver] keyframe requested but CpStack has no forceMainKeyframe()')
     }
     return
   }

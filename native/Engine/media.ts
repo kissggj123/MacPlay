@@ -36,12 +36,12 @@ export function openScreenReceiver(id:number,key:Buffer):number {
   if(receivers.get(id)!==token)return
   videoGeneration++;firstFramePending=true
   if(player) addon.stop(player)
-  // Fork: zero-transcode mode uses the direct H.264 forwarder (h264direct),
-  // no GStreamer pipeline needed at all.
-  if(noDecode()){
-    player=0
-    return
-  }
+  // Fork: zero-transcode mode still creates the GStreamer player!
+  // The iPhone needs the player creation as a "ready" signal before it
+  // starts sending video slices. The Rust Player::new handles
+  // MACPLAY_NO_DECODE by using fakesink (no decoder, minimal CPU).
+  // DO NOT return early here — that breaks the iPhone video stream.
+  // (Was: if(noDecode()){ player=0; return })
   // Fork: headless mode still creates the GStreamer pipeline (for H.264
   // parsing and web forwarding), but with no native window. The Rust
   // Player::new handles MACPLAY_NO_DECODE by skipping the decoder.
