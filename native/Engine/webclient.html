@@ -377,6 +377,7 @@
   }
   function feedNal(nal){
     var t=nalType(nal);
+    if(window._debugNal!==t){ window._debugNal=t; console.log('[NAL] type='+t+' codec='+videoCodec); }
     if(videoCodec==='h265'){
       if(t===32){ cacheParam('vps',nal); return; }
       if(t===33){ cacheParam('sps',nal); return; }
