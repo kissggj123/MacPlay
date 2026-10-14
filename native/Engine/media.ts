@@ -26,20 +26,23 @@ let videoGeneration=0, firstFramePending=false, presented=false
 const receivers=new Map<number,object>()
 export let onVideo: (()=>void)|undefined
 export function setVideoCallback(callback:()=>void, ratio:number) { onVideo=callback; aspect=ratio }
+// Fork (headless): when MACPLAY_HEADLESS=1 the Rust pipeline uses fakesink
+// (see codec sink_chain) and no native window is created or presented.
+function headless(){ return process.env.MACPLAY_HEADLESS==='1' }
 export function openScreenReceiver(id:number,key:Buffer):number {
  const token={};receivers.set(id,token)
  return addon.openVideoReceiver(id,key,(codec:number,atom:Buffer)=>{
   if(receivers.get(id)!==token)return
   videoGeneration++;firstFramePending=true
   if(player) addon.stop(player)
-  const handle=windowHandle ?? (windowHandle=addon.macplayPrepareVideoWindow(aspect))
+  const handle=headless()?Buffer.alloc(0):(windowHandle ?? (windowHandle=addon.macplayPrepareVideoWindow(aspect)))
   player=addon.createPlayer(codec===1?'h265':'h264',handle,atom,id)
   if(!player) throw new Error('无法创建CarPlay视频解码器')
   addon.start(player); addon.setContentRegion(player,0,0,aspect*1000,1000,aspect*1000,1000)
 
  })
 }
-export function closeScreenReceiver(id:number) { receivers.delete(id);videoGeneration++;firstFramePending=false;presented=false; addon.closeVideoReceiver(id); if(player){addon.stop(player);player=null} addon.macplayCloseVideoWindow(); windowHandle=undefined }
+export function closeScreenReceiver(id:number) { receivers.delete(id);videoGeneration++;firstFramePending=false;presented=false; addon.closeVideoReceiver(id); if(player){addon.stop(player);player=null} if(!headless())addon.macplayCloseVideoWindow(); windowHandle=undefined }
 export function onAudioReceiverStarted(cb:(id:number,sample:number)=>void) {started=cb}
 export function openAudioReceiver(key:Buffer,o:any):any {
  return addon.openAudioReceiver(key,o.codec,o.payloadType,o.clockRate,o.channels,o.latencyMs,o.realtime,o.device,(id:number,sample:number)=>started?.(id,sample))
@@ -66,7 +69,8 @@ export function pollVideoReady() {
  if(width<=0||height<=0||generation!==videoGeneration||current!==player)return
  firstFramePending=false;aspect=width/height
  addon.setContentRegion(player,0,0,width,height,width,height)
- if(!presented){addon.macplayWindowHandle(aspect);presented=true}
+ if(headless()){/* no native window in headless mode */}
+ else if(!presented){addon.macplayWindowHandle(aspect);presented=true}
  else addon.macplayPrepareVideoWindow(aspect)
  console.log(JSON.stringify({stage:'first-decoded-frame',width,height}))
  onVideo?.()
