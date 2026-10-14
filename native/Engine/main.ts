@@ -95,6 +95,10 @@ const server=net.createServer(socket=>{
  // and apply them to the live in-memory config so the NEXT session (the phone
  // reconnects after the drop) negotiates the new resolution natively.
  stack.onDisplayChange=cfg=>{
+  // Fork: veto on wired USB — the phone never reconnects after a dropped wired
+  // session, so the renegotiation would stall the receiver (画面卡死). The
+  // browser scales any session resolution, so keep the live stream untouched.
+  if(usbSession){log('有线连接不切换分辨率','保持当前会话，浏览器画面自动缩放显示');return false}
   try{
    const cur=JSON.parse(fs.readFileSync(settingsFile,'utf8'))
    cur.width=cfg.width;cur.height=cfg.height;cur.fps=cfg.fps;cur.webCodec=cfg.codec

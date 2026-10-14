@@ -199,8 +199,9 @@ interface CpSession {
 
 export class CpStack extends EventEmitter {
   deviceFilter: ((id: string) => boolean) | null = null
-  /** Fork: called by setDisplay so the host can persist the change across restarts. */
-  onDisplayChange: ((cfg: { width: number; height: number; fps: number; codec: string }) => void) | null = null
+  /** Fork: called by setDisplay so the host can persist the change across restarts.
+   *  Return false to veto the change (the session is kept untouched). */
+  onDisplayChange: ((cfg: { width: number; height: number; fps: number; codec: string }) => boolean | void) | null = null
   private deviceAccepted = false
   private readonly _conns = new Set<net.Socket>()
   private _configRefresh: (() => void) | null = null
@@ -1314,6 +1315,11 @@ export class CpStack extends EventEmitter {
    * persists it across engine restarts, then the live session is dropped so the
    * phone reconnects and renegotiates the stream. */
   setDisplay(cfg: { width: number; height: number; fps: number; codec: string }): void {
+    // Fork: let the host veto first — a wired USB session never reconnects after
+    // the drop (the phone treats it as user-initiated teardown), so renegotiating
+    // for the browser's window size would stall the receiver. The browser client
+    // scales whatever resolution the session runs at, so nothing is lost.
+    try { if (this.onDisplayChange?.(cfg) === false) return } catch { /* non-fatal */ }
     this.applyDisplayConfig({
       hevc: cfg.codec !== 'h264',
       main: {
@@ -1326,7 +1332,6 @@ export class CpStack extends EventEmitter {
     console.log(
       `[cpStack] display change: ${cfg.width}x${cfg.height}@${cfg.fps} ${cfg.codec} — dropping session to renegotiate`
     )
-    try { this.onDisplayChange?.(cfg) } catch { /* persist failures are non-fatal */ }
     for (const sock of [...this._conns]) sock.destroy()
   }
 
