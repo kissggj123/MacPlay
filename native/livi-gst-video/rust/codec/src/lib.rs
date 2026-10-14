@@ -97,6 +97,12 @@ pub fn sink_chain(sink_override: Option<&str>) -> String {
     #[cfg(target_os = "macos")]
     {
         let _ = sink_override;
+        // Fork (headless): no local window — decode only for the web tap.
+        // MACPLAY_HEADLESS=1 replaces glimagesink with fakesink; the Engine
+        // also skips creating/presenting the native window (see media.ts).
+        if std::env::var_os("MACPLAY_HEADLESS").is_some() {
+            return "fakesink name=sink sync=false".to_owned();
+        }
         // force-aspect-ratio=false: the clip view enforces the ratio, the sink must fill
         "glimagesink name=sink sync=false qos=false force-aspect-ratio=false".to_owned()
     }
@@ -135,6 +141,12 @@ pub fn pipeline_desc(codec: &str, decoder: &str, cal: &str, sink_override: Optio
     // chain untouched; branch two downscales and JPEG-encodes into an appsink
     // named `websink`, consumed by player/src/webtap.rs which serves MJPEG.
     // Unset (default): byte-identical pipeline to upstream.
+    //
+    // Fork addition (WebCodecs passthrough): when MACPLAY_H264_PORT is set,
+    // tap the *encoded* H.264 stream right after the parser (before decoding)
+    // into an appsink named `h264sink`, consumed by player/src/h264tap.rs.
+    // The browser decodes it with WebCodecs — zero re-encode, full quality.
+    // Unset (default): byte-identical pipeline to upstream.
     let tail = if std::env::var_os("MACPLAY_WEB_PORT").is_some() {
         format!(
             "{decoder} name=dec ! tee name=t \
@@ -156,15 +168,53 @@ pub fn pipeline_desc(codec: &str, decoder: &str, cal: &str, sink_override: Optio
             sink = sink_chain(sink_override),
         )
     };
-    format!(
-        "appsrc name=src is-live=true do-timestamp=true format=time \
-         min-latency=0 max-latency=0 caps={caps} \
-         ! {parser} \
-         ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=2000000000 \
-         ! {tail}",
-        caps = caps_for(codec).to_str().unwrap_or(""),
-        parser = parser_for(codec).to_str().unwrap_or(""),
-    )
+    // M1 zero-CPU mode: when MACPLAY_NO_DECODE is set, skip the video decoder
+    // entirely. The parsed H.264 goes straight to the WebCodecs tap (h264sink)
+    // and to the (headless) fakesink. No MJPEG, no local decode — the Mac is
+    // a pure packet forwarder. Requires a WebCodecs-capable browser.
+    // Unset (default): normal pipeline with hardware (vtdec) decode.
+    if std::env::var_os("MACPLAY_NO_DECODE").is_some() {
+        return format!(
+            "appsrc name=src is-live=true do-timestamp=true format=time \
+             min-latency=0 max-latency=0 caps={caps} \
+             ! {parser} ! tee name=pret \
+             pret. ! queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! {sink} \
+             pret. ! queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! appsink name=h264sink emit-signals=false max-buffers=30 drop=true sync=false",
+            caps = caps_for(codec).to_str().unwrap_or(""),
+            parser = parser_for(codec).to_str().unwrap_or(""),
+            sink = sink_chain(sink_override),
+        );
+    }
+    // Optional H.264 passthrough tap: split right after the parser so the
+    // browser can decode the original stream with WebCodecs.
+    let head = if std::env::var_os("MACPLAY_H264_PORT").is_some() {
+        format!(
+            "appsrc name=src is-live=true do-timestamp=true format=time \
+             min-latency=0 max-latency=0 caps={caps} \
+             ! {parser} ! tee name=pret \
+             pret. ! queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! {tail} \
+             pret. ! queue max-size-buffers=30 max-size-bytes=0 max-size-time=0 leaky=downstream \
+             ! appsink name=h264sink emit-signals=false max-buffers=30 drop=true sync=false",
+            caps = caps_for(codec).to_str().unwrap_or(""),
+            parser = parser_for(codec).to_str().unwrap_or(""),
+            tail = tail,
+        )
+    } else {
+        format!(
+            "appsrc name=src is-live=true do-timestamp=true format=time \
+             min-latency=0 max-latency=0 caps={caps} \
+             ! {parser} \
+             ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=2000000000 \
+             ! {tail}",
+            caps = caps_for(codec).to_str().unwrap_or(""),
+            parser = parser_for(codec).to_str().unwrap_or(""),
+            tail = tail,
+        )
+    };
+    head
 }
 
 #[cfg(test)]
