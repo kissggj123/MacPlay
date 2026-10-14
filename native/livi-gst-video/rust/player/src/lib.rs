@@ -7,6 +7,7 @@ use gstreamer_base as gst_base;
 use std::sync::Once;
 
 mod webtap;
+mod h264tap;
 
 static INIT: Once = Once::new();
 
@@ -298,6 +299,9 @@ impl Player {
         // Fork: start the optional MJPEG web tap. No-op unless MACPLAY_WEB_PORT
         // is set (see webtap.rs).
         webtap::maybe_start(&player.pipeline);
+        // Fork: start the optional H.264 passthrough tap for WebCodecs.
+        // No-op unless MACPLAY_H264_PORT is set (see h264tap.rs).
+        h264tap::maybe_start(&player.pipeline);
 
         Some(player)
     }
@@ -342,10 +346,16 @@ impl Player {
             // pipeline_desc keys the tee branch off this env var; drop it for
             // the retry, then restore.
             let saved = std::env::var_os("MACPLAY_WEB_PORT");
-            std::env::remove_var("MACPLAY_WEB_PORT");
+            // SAFETY: single-threaded at pipeline setup; no other thread reads this var yet.
+            unsafe {
+                std::env::remove_var("MACPLAY_WEB_PORT");
+            }
             let plain = describe(with_cal);
             if let Some(v) = saved {
-                std::env::set_var("MACPLAY_WEB_PORT", v);
+                // SAFETY: see above.
+                unsafe {
+                    std::env::set_var("MACPLAY_WEB_PORT", v);
+                }
             }
             if let Some(p) = try_launch(&plain) {
                 return Some(p);

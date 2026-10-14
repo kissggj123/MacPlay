@@ -17,6 +17,8 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use gstreamer::prelude::*;
+
 const BOUNDARY: &str = "macplaymjpeg";
 const FRAME_INTERVAL: Duration = Duration::from_millis(66); // ~15 fps is plenty for a car browser
 const IDLE_POLL: Duration = Duration::from_millis(200);
@@ -34,7 +36,7 @@ pub fn maybe_start(pipeline: &gstreamer::Pipeline) {
         Some(p) => p,
         None => return,
     };
-    let appsink = match pipeline
+    let appsink: gstreamer_app::AppSink = match pipeline
         .by_name("websink")
         .and_then(|e| e.downcast::<gstreamer_app::AppSink>().ok())
     {
@@ -53,7 +55,8 @@ pub fn maybe_start(pipeline: &gstreamer::Pipeline) {
         let _ = std::thread::Builder::new()
             .name("webtap-pull".into())
             .spawn(move || {
-                appsink.set_emit_signals(false);
+                // emit-signals=false is already set on the appsink element in
+                // the pipeline description; pull mode needs no signals.
                 loop {
                     match appsink.try_pull_sample(gstreamer::ClockTime::from_seconds(2)) {
                         Some(sample) => {
