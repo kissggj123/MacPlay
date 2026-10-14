@@ -146,10 +146,13 @@ const webServer=startWebServer({
   // Bluetooth headphone); whichever device opens a browser gets the sound.
   onBrowserClients:(connected)=>{
     for(const stack of sessions){try{stack.setAudioActive(connected)}catch(e){console.error('[audio-route]',e)}}
-    // Actual pause/resume on the phone via the CarPlay media HID key
-    // (1=Play 0xB0, 2=Pause 0xB1) — setAudioActive alone only stops the
-    // local sink and the phone keeps "playing" into nowhere.
-    try{active?.sendMedia(connected?1:2)}catch(e){console.error('[audio-key]',e)}
+    // Media key: 1=Play 0xB0, 2=Pause 0xB1. Leaving always pauses; on attach
+    // we only auto-resume when the user hasn't opted to respect a manual
+    // pause (设置：打开浏览器时自动恢复播放).
+    try{
+      if(!connected)active?.sendMedia(2)
+      else if(settings.autoResumeOnBrowser!==false)active?.sendMedia(1)
+    }catch(e){console.error('[audio-key]',e)}
   },
   // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
   // No getScreenFrame = use internal pipeline, not external screencapture.

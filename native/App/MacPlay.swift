@@ -130,6 +130,10 @@ struct PlaySettings: Codable {
     var accessPointMAC: String? = nil
     var bluetoothMAC = ""
     var audioEnabled = false
+    // Fork: send the Play media key when a browser client attaches. Turn off
+    // to respect a manual pause — opening a browser only restores the audio
+    // route; the user resumes playback themselves.
+    var autoResumeOnBrowser: Bool? = nil
     var volume = 1.0
 }
 
@@ -955,6 +959,8 @@ struct SettingsView: View {
                             Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要MacPlay保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
                         }
                         Section(L("车机浏览器")) {
+                            Toggle(L("打开浏览器时自动恢复播放"),isOn:Binding(get:{model.settings.autoResumeOnBrowser ?? true},set:{model.settings.autoResumeOnBrowser=$0;model.persistPreferences()}))
+                            Text(L("开启：任一设备打开浏览器页面即自动继续播放，关闭页面自动暂停（同蓝牙耳机断开）。关闭：打开浏览器仅接通声音通道，是否播放、暂停由你在画面里手动控制（尊重手动暂停）。")).font(.callout).foregroundStyle(.secondary)
                             Text(L("在车机浏览器打开以下地址（Mac 与车机需在同一局域网）：")).font(.callout).foregroundStyle(.secondary)
                             if model.lanAddresses.isEmpty {
                                 Text(L("未检测到局域网地址，请确认 Mac 已连接 Wi-Fi。")).foregroundStyle(.secondary)
