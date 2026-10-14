@@ -86,6 +86,15 @@ function wsSendText(socket: net.Socket, text: string): void {
   socket.write(Buffer.concat([header, payload]))
 }
 
+/** Fork: protocol-level ping (opcode 0x9). Browsers answer it in the network
+ *  stack with a 0x8A pong even when the page's JS is frozen by Safari App Nap —
+ *  a text {"t":"ping"} never survives that (frozen JS can't reply), which used
+ *  to get the client kicked as dead and paused the music mid-play. */
+function wsSendPing(socket: net.Socket): void {
+  if ((socket as any).destroyed) return
+  try { socket.write(Buffer.from([0x89, 0x00])) } catch { /* ignore */ }
+}
+
 /** Server -> client unmasked binary frame (wheelplay PCM audio). */
 // Fork: backpressure guard — a stalled browser (car screen off, WiFi roaming)
 // stops reading TCP; without a cap the kernel buffer grows for minutes and the
@@ -623,7 +632,9 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       (bin) => { (sock as any).lastSeen = Date.now(); forwardMic(bin) },
       remove,
     )
-    sock.on('data', (c: Buffer) => parser.feed(c))
+    // Fork: any inbound byte counts as life — the auto-pong (0x8A) answers our
+    // protocol ping without the page's JS ever running.
+    sock.on('data', (c: Buffer) => { ;(sock as any).lastSeen = Date.now(); parser.feed(c) })
     sock.on('error', remove)
     sock.on('close', remove)
   })
@@ -642,7 +653,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
         try { sock.destroy() } catch { /* ignore */ }
         continue
       }
-      wsSendText(sock, JSON.stringify({ t: 'ping' }))
+      wsSendPing(sock)
     }
   }, 20000).unref?.()
 
