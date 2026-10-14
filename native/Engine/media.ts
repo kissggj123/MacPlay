@@ -38,7 +38,7 @@ export function openScreenReceiver(id:number,key:Buffer):number {
   // Fork: headless mode still creates the GStreamer pipeline (for H.264
   // parsing and web forwarding), but with no native window. The Rust
   // Player::new handles MACPLAY_NO_DECODE by skipping the decoder.
-  const handle=headless()?0:(windowHandle ?? (windowHandle=addon.macplayPrepareVideoWindow(aspect)))
+  const handle=headless()?Buffer.alloc(0):(windowHandle ?? (windowHandle=addon.macplayPrepareVideoWindow(aspect)))
   player=addon.createPlayer(codec===1?'h265':'h264',handle,atom,id)
   if(!player) throw new Error('无法创建CarPlay视频解码器')
   if(!headless()){ addon.start(player); addon.setContentRegion(player,0,0,aspect*1000,1000,aspect*1000,1000) }
