@@ -844,9 +844,9 @@ struct PlaySettings: Codable {
 }
 
 enum Page: String,CaseIterable,Identifiable {
-    case connection="连接",display="显示",audio="音频",about="关于"
+    case connection="连接",about="关于"
     var id:String{rawValue}
-    var icon:String {switch self{case .connection:return "iphone.radiowaves.left.and.right";case .display:return "display";case .audio:return "speaker.wave.2";case .about:return "info.circle"}}
+    var icon:String {switch self{case .connection:return "iphone.radiowaves.left.and.right";case .about:return "info.circle"}}
 }
 
 struct SettingsView: View {
@@ -954,44 +954,6 @@ struct SettingsView: View {
                                 if !model.passwordStatus.isEmpty {Text(L(model.passwordStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)}
                                 Text(L("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为MacPlay的Wi-Fi。填写SSID与共享密码，或授权读取已保存的密码。802.1X企业Wi-Fi的用户名、个人密码或证书不能作为共享密码发送。")).font(.callout).foregroundStyle(.secondary)
                             }
-                        }
-                    case .display:
-                        Section(L("显示器")) {
-                            Picker(L("显示位置"),selection:Binding(get:{model.settings.displayID ?? model.displays.first?.id ?? 0},set:{model.settings.displayID=$0;model.updateResolution()})) {
-                                ForEach(model.displays){Text($0.label).tag($0.id)}
-                            }
-                            if let panel=model.displays.first(where:{$0.id==model.settings.displayID}) {Text(L(panel.details)).font(.callout).foregroundStyle(.secondary)}
-                            Text(L("默认内建显示器；切换显示器后应用并重新连接。")).font(.callout).foregroundStyle(.secondary)
-                        }
-                        Section(L("视频分辨率")) {
-                            Picker(L("分辨率"),selection:$model.settings.resolution) {
-                                Text(L("屏幕原生像素（避开刘海）")).tag("native")
-                                ForEach(["1280x720","1920x1080","2560x1440"],id:\.self){Text($0.replacingOccurrences(of:"x",with:"×")).tag($0)}
-                                Text(L("自定义")).tag("custom")
-                            }.onChange(of:model.settings.resolution){_,_ in model.updateResolution()}
-                            if model.settings.resolution == "custom" {
-                                TextField(L("宽度（像素）"),value:$model.settings.width,format:.number)
-                                TextField(L("高度（像素）"),value:$model.settings.height,format:.number)
-                            }
-                            Toggle(L("严格按屏幕物理像素显示"),isOn:Binding(get:{model.settings.strictPixels ?? false},set:{model.settings.strictPixels=$0})).disabled(model.settings.resolution == "native")
-                            LabeledContent(L("请求像素"),value:"\(model.settings.width)×\(model.settings.height)")
-                            Text(L("原生像素模式全屏显示。关闭严格像素显示后，窗口适配屏幕并可等比例调整大小，不改变请求分辨率。")).font(.callout).foregroundStyle(.secondary)
-                        }
-                        Section(L("流畅度")) {
-                            Picker(L("最高帧率"),selection:$model.settings.fps){ForEach([30,60,90,120],id:\.self){Text(L("\($0)fps")).tag($0)}}
-                            Text(L("高帧率为实验请求：120fps协商失败后改用90fps，90fps仍失败则改用60fps。发起CarPlay连接后20秒未启动视频视为失败。")).font(.callout).foregroundStyle(.secondary)
-                            if !model.frameRateFallbackNote.isEmpty {Text(L(model.frameRateFallbackNote)).font(.callout).foregroundStyle(.secondary)}
-                            Text(L("上报所选分辨率与固定窗口对应的真实物理尺寸，不提供倍率调节。请关闭CarPlay自身的“智能缩放显示”以避免自动缩放。帧率为请求上限。")).font(.callout).foregroundStyle(.secondary)
-                        }
-                    case .audio:
-                        Section(L("CarPlay声音")) {
-                            Toggle(L("播放iPhone音频"),isOn:$model.settings.audioEnabled).onChange(of:model.settings.audioEnabled){_,_ in model.applyLiveAudio()}
-                            LabeledContent(L("媒体音量")){Slider(value:$model.settings.volume,in:0...1).onChange(of:model.settings.volume){_,_ in model.applyLiveAudio()};Text(L("\(Int(model.settings.volume*100))%")).monospacedDigit().frame(width:42)}
-                            LabeledContent(L("通话音量")){Slider(value:Binding(get:{model.settings.callVolume ?? 1},set:{model.settings.callVolume=$0;model.applyLiveAudio()}),in:0...1);Text(L("\(Int((model.settings.callVolume ?? 1)*100))%")).monospacedDigit().frame(width:42)}
-                            Picker(L("输出设备"),selection:Binding(get:{model.settings.outputDevice ?? ""},set:{model.settings.outputDevice=$0})) {Text(L("系统默认设备")).tag("");ForEach(model.audioOutputs){Text($0.name).tag($0.id)}}
-                            Picker(L("输入设备"),selection:Binding(get:{model.settings.inputDevice ?? ""},set:{model.settings.inputDevice=$0})) {Text(L("系统默认设备")).tag("");ForEach(model.audioInputs){Text($0.name).tag($0.id)}}
-                            Button(L("刷新设备")){model.refreshHardware()}
-                            Text(L("媒体与通话音量实时生效；设备切换后应用并重新连接。默认跟随系统设备，麦克风使用需要系统授权。")).font(.callout).foregroundStyle(.secondary)
                         }
                     case .about:
                         MacPlayAboutView(model:model,updates:updates)
