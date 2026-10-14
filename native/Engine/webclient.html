@@ -494,6 +494,28 @@
     var proto=location.protocol==='https:'?'wss':'ws';
     h264ws=new WebSocket(proto+'://'+location.host+'/h264');
     h264ws.binaryType='arraybuffer';
+    // Fork: poll /health for codec changes (server doesn't push to existing clients)
+    setInterval(function(){
+      try{
+        var xhr=new XMLHttpRequest();
+        xhr.open('GET','/health',true);
+        xhr.onload=function(){
+          if(xhr.status===200){
+            try{
+              var h=JSON.parse(xhr.responseText);
+              if(h.codec&&h.codec!==videoCodec){
+                console.log('[codec] changed via /health: '+videoCodec+' -> '+h.codec);
+                videoCodec=h.codec;
+                spsPps=null; decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+                try{ videoDecoder.close(); }catch(e){}
+                makeDecoder();
+              }
+            }catch(e){}
+          }
+        };
+        xhr.send();
+      }catch(e){}
+    }, 2000);
     h264ws.onmessage=function(ev){
       // Fork: first message is JSON with codec info
       if(typeof ev.data==='string'){
