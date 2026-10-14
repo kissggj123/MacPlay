@@ -8,7 +8,7 @@
   html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden;
     -webkit-user-select:none;user-select:none;touch-action:none}
   #v{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;
-    touch-action:none;cursor:pointer}
+    touch-action:none;cursor:pointer;display:none}
   #c{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;
     touch-action:none;cursor:pointer;display:none}
   #waiting{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
@@ -202,7 +202,11 @@
         if(!imgShown){ imgShown=true; waiting.style.display='none'; }
         frameCount++;
       },
-      error:function(e){}
+      error:function(e){
+        // Fork: show decoder errors on the waiting overlay for debugging
+        var w=document.getElementById('waiting');
+        if(w) w.innerHTML='解码器错误: '+(e&&e.message?e.message:e)+'<br>请截图发给开发者';
+      }
     });
     var proto=location.protocol==='https:'?'wss':'ws';
     h264ws=new WebSocket(proto+'://'+location.host+'/h264');
@@ -211,11 +215,22 @@
     h264ws.onmessage=function(ev){
       var data=new Uint8Array(ev.data); bytesCount+=data.length;
       var units=parseNalUnits(data);
+      // Fork: debug - show received NAL stats on waiting overlay
+      var w=document.getElementById('waiting');
       for(var i=0;i<units.length;i++){
         var nal=units[i], type=nal[0]&0x1F;
         if(type===7){ spsPps=spsPps||{}; spsPps.sps=nal; }
         else if(type===8){ spsPps=spsPps||{}; spsPps.pps=nal; }
-        if(!decoderConfigured&&spsPps&&spsPps.sps&&spsPps.pps) configureDecoder(spsPps.sps,spsPps.pps);
+        if(!decoderConfigured&&spsPps&&spsPps.sps&&spsPps.pps) {
+          try { configureDecoder(spsPps.sps,spsPps.pps); }
+          catch(cfgErr){ if(w) w.innerHTML='配置解码器失败: '+cfgErr.message; }
+        }
+        if(w && !imgShown) {
+          w.innerHTML='收到 NAL: type='+type+' ('+units.length+'个/包)<br>'+
+            'SPS:'+(spsPps&&spsPps.sps?'✓':'✗')+' PPS:'+(spsPps&&spsPps.pps?'✓':'✗')+
+            '<br>解码器:'+(decoderConfigured?'已配置':'未配置')+
+            '<br>已解码帧:'+frameCount;
+        }
         decodeNalUnit(nal,ts);
       }
       ts+=33333; updateHud('WebCodecs H.264');
@@ -225,6 +240,7 @@
   }
 
   function startMjpeg(){
+    img.style.display='block'; canvas.style.display='none';
     img.src='/mjpeg?'+Date.now();
     img.addEventListener('error',function(){
       imgShown=false; waiting.style.display='flex';
