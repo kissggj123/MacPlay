@@ -1,0 +1,83 @@
+name: Build macOS DMG
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布到的 Release tag（留空则用 v1.2.2-car.1）'
+        required: false
+        default: 'v1.2.2-car.1'
+
+jobs:
+  build-arm64:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install GStreamer framework
+        run: |
+          GST_VERSION="1.28.7"
+          BASE="https://gstreamer.freedesktop.org/data/pkg/osx/${GST_VERSION}"
+          cd /tmp
+          curl -fL --retry 3 -o gst-runtime.pkg \
+            "${BASE}/gstreamer-1.0-${GST_VERSION}-universal.pkg"
+          curl -fL --retry 3 -o gst-devel.pkg \
+            "${BASE}/gstreamer-1.0-devel-${GST_VERSION}-universal.pkg"
+          sudo installer -pkg /tmp/gst-runtime.pkg -target /
+          sudo installer -pkg /tmp/gst-devel.pkg -target /
+          ls /Library/Frameworks/GStreamer.framework/Versions/1.0/lib/pkgconfig \
+            | head -5
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: bash scripts/build-macplay.sh --arch=arm64
+        env:
+          PKG_CONFIG_PATH: /Library/Frameworks/GStreamer.framework/Versions/1.0/lib/pkgconfig
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacPlay-CarBrowser-macOS-arm64
+          path: dist/*.dmg
+          retention-days: 30
+
+  release:
+    needs: build-arm64
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - name: Download DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: MacPlay-CarBrowser-macOS-arm64
+          path: dist
+
+      - name: Publish DMG to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.tag }}
+          files: dist/*.dmg
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
