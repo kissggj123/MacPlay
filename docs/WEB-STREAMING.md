@@ -45,13 +45,19 @@ Design notes:
 
 | File | Change |
 |---|---|
-| `native/livi-gst-video/rust/codec/src/lib.rs` | `pipeline_desc()`: tee branch (`jpegenc` → `appsink name=websink`) when `MACPLAY_WEB_PORT` set |
+| `native/livi-gst-video/rust/codec/src/lib.rs` | `pipeline_desc()`: tee branch (`jpegenc` → `appsink name=websink`) when `MACPLAY_WEB_PORT` set; `MACPLAY_HEADLESS=1` → `fakesink` instead of `glimagesink` |
 | `native/livi-gst-video/rust/player/src/lib.rs` | `mod webtap`; hook in `Player::new`; parse fallback without tap |
 | `native/livi-gst-video/rust/player/src/webtap.rs` | **new**: appsink pull → MJPEG HTTP on 127.0.0.1:$PORT |
-| `native/Engine/webserver.ts` | **new**: HTTP :8080 + WS `/touch` → `sendTouches()` |
-| `native/Engine/webclient.html` | **new**: browser client (copied to `build/engine/`) |
-| `native/Engine/main.ts` | import + `MACPLAY_WEB_PORT` env for helper + `startWebServer()` |
+| `native/livi-gst-video/rust/audioplayer/src/lib.rs` | `pipeline_desc()`: tee PCM → `appsink name=webaudio` when `MACPLAY_WEB_PORT` set (drops local `osxaudiosink`); `mod webaudio`; tap register/unregister |
+| `native/livi-gst-video/rust/audioplayer/src/webaudio.rs` | **new**: PCM tap per stream → wheelplay-protocol frames → TCP relay on 127.0.0.1:$AUDIO_PORT for the Node WS relay |
+| `native/Engine/webserver.ts` | **new**: HTTP :8080 + WS `/touch` → `sendTouches()`; `/audio` proxy |
+| `native/Engine/webclient.html` | **new**: browser client (copied to `build/engine/`); fullscreen video by default; `<audio>` for CarPlay audio |
+| `native/Engine/main.ts` | import + `MACPLAY_WEB_PORT`/`_AUDIO_PORT` env in Engine process + `startWebServer()`; **OEM homescreen icon removed** (`icons=[]`); no-sleep `caffeinate -s` while connected (setting); headless env sync |
+| `native/Engine/media.ts` | headless: skip native window creation/presentation |
+| `native/App/MacPlay.swift` | settings: "CarPlay连接时防止系统休眠" + "无头模式" toggles |
+| `native/App/Localization.swift` | translations for the new toggles |
 | `scripts/build-macplay.sh` | copy `webclient.html` into `build/engine/` |
+| `scripts/car-mode.sh` | **new**: display-off + no-sleep toggle for in-car use |
 
 ## Apply (on your Mac)
 
@@ -116,6 +122,61 @@ Two-window workflow in the car:
 The video tap lives inside the GStreamer pipeline (not screen capture), so the
 MJPEG stream to the car browser keeps flowing with the display off. Any
 keypress wakes the display manually at any time.
+
+### Finding the car-browser URL + firewall
+
+MacPlay's settings (连接 → 应用 → **车机浏览器**) shows every LAN IPv4
+address as `http://<ip>:8080` (copy button included, Wi-Fi first).
+
+**Firewall** (macOS System Settings → Network → Firewall): the car browser
+needs **TCP 8080** into the Mac. The listener is the `MacPlayReceiver`
+binary (`MacPlay.app/Contents/Resources/runtime/.../MacPlayReceiver`).
+The settings section shows the firewall state:
+- off → nothing to do;
+- on + already allowed → nothing to do;
+- on + not allowed → **一键放行 MacPlayReceiver** (asks for an admin
+  password once and runs `socketfilterfw --add`), or allow it manually —
+  macOS also prompts automatically the first time the port is bound.
+
+iPhone↔Mac CarPlay itself (USB via system usbmuxd, wireless via Bluetooth +
+Wi-Fi) uses MacPlay's own channels and is unaffected by this.
+
+### In-app options (MacPlay settings → 连接 → 应用)
+
+- **CarPlay连接时防止系统休眠**: while a CarPlay session is active, the Engine
+  holds a `caffeinate -s` assertion (`PreventSystemSleep`), so the Mac won't
+  sleep — including with the **lid closed** (requires AC power; on battery the
+  assertion is ignored by macOS). The display may still sleep normally.
+  This largely replaces `scripts/car-mode.sh`.
+- **无头模式（不在Mac上显示CarPlay画面）**: no native CarPlay window on the
+  Mac at all — video decodes to `fakesink` and only the browser client shows
+  it. Takes effect on the next connection.
+
+### CarPlay audio in the car browser
+
+When web streaming is on, every CarPlay audio stream (media, call, Siri,
+alerts) is teed after decoding and its PCM frames are forwarded to the car
+browser:
+
+- Rust (`audioplayer/src/webaudio.rs`): each pipeline's `webaudio` appsink
+  emits raw PCM (S16LE 48 kHz stereo) with a 20-byte header borrowed from
+  [wheelplay](https://github.com/fython/wheelplay)'s browser-audio protocol
+  (magic `0x31415057`, stream id, rate/channels, media flag, sequence).
+  Frames go over TCP `127.0.0.1:18082` (`MACPLAY_WEB_AUDIO_PORT`) to Node,
+  which relays them as WebSocket binary messages on `/touch`.
+- Browser (`webclient.html`): plays them with the Web Audio API (ported from
+  wheelplay's `browser-audio.js`, Apache-2.0) — ~300 ms buffering for media,
+  ~60 ms for voice. No Opus encoding on the Mac, no `<audio>` streaming lag.
+  Mute button top-right; playback starts after the first tap (browser
+  autoplay policy).
+
+**The Mac itself stays silent** — local `osxaudiosink` playback is dropped in
+web mode; audio goes to the car browser instead.
+
+Touch input also borrows from wheelplay: letterbox-aware coordinate mapping
+(`mapPoint`, fixing edge touches when the video is pillarboxed), rAF
+coalescing of move events, and finger release on blur/hide/pagehide so
+touches never stick.
 
 Env overrides (for debugging):
 
