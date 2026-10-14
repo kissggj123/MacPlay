@@ -960,17 +960,31 @@ struct SettingsView: View {
                                 Text(L("未检测到局域网地址，请确认 Mac 已连接 Wi-Fi。")).foregroundStyle(.secondary)
                             } else {
                                 ForEach(model.lanAddresses, id: \.address) { item in
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("http://\(item.address):8080").textSelection(.enabled)
-                                            Text(item.name).font(.caption).foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("https://\(item.address):8443").textSelection(.enabled).font(.system(.body, design: .monospaced)).bold()
+                                                Text(L("推荐：WebCodecs 硬件解码，流畅低延迟（需信任自签证书）")).font(.caption).foregroundStyle(.secondary)
+                                            }
+                                            Spacer()
+                                            Button(L("复制 HTTPS")) {
+                                                NSPasteboard.general.clearContents()
+                                                NSPasteboard.general.setString("https://\(item.address):8443", forType: .string)
+                                            }
                                         }
-                                        Spacer()
-                                        Button(L("复制")) {
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.setString("http://\(item.address):8080", forType: .string)
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("http://\(item.address):8080").textSelection(.enabled).font(.system(.callout, design: .monospaced))
+                                                Text(item.name).font(.caption2).foregroundStyle(.secondary)
+                                            }
+                                            Spacer()
+                                            Button(L("复制 HTTP")) {
+                                                NSPasteboard.general.clearContents()
+                                                NSPasteboard.general.setString("http://\(item.address):8080", forType: .string)
+                                            }
                                         }
                                     }
+                                    .padding(.vertical, 4)
                                 }
                             }
                             HStack {

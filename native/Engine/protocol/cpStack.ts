@@ -199,6 +199,8 @@ interface CpSession {
 
 export class CpStack extends EventEmitter {
   deviceFilter: ((id: string) => boolean) | null = null
+  /** Fork: called by setDisplay so the host can persist the change across restarts. */
+  onDisplayChange: ((cfg: { width: number; height: number; fps: number; codec: string }) => void) | null = null
   private deviceAccepted = false
   private readonly _conns = new Set<net.Socket>()
   private _configRefresh: (() => void) | null = null
@@ -1303,8 +1305,29 @@ export class CpStack extends EventEmitter {
     this._sendEventCommand(s, encodeBplist({ type: 'forceKeyFrame', params: { uuid: ALT_UUID } }))
   }
 
-  applyDisplayConfig(next: CpStackConfig): void {
+  applyDisplayConfig(next: Partial<CpStackConfig>): void {
     Object.assign(this.cfg, next)
+  }
+
+  /** Fork: apply a display/codec change requested from the browser client. /info
+   * for the NEXT session carries it (cfg is shared by reference), onDisplayChange
+   * persists it across engine restarts, then the live session is dropped so the
+   * phone reconnects and renegotiates the stream. */
+  setDisplay(cfg: { width: number; height: number; fps: number; codec: string }): void {
+    this.applyDisplayConfig({
+      hevc: cfg.codec !== 'h264',
+      main: {
+        ...this.cfg.main,
+        widthPixels: cfg.width,
+        heightPixels: cfg.height,
+        fps: cfg.fps,
+      },
+    })
+    console.log(
+      `[cpStack] display change: ${cfg.width}x${cfg.height}@${cfg.fps} ${cfg.codec} — dropping session to renegotiate`
+    )
+    try { this.onDisplayChange?.(cfg) } catch { /* persist failures are non-fatal */ }
+    for (const sock of [...this._conns]) sock.destroy()
   }
 
   setConfigRefresh(fn: () => void): void {

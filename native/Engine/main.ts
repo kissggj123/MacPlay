@@ -38,7 +38,7 @@ const identity=loadOrCreateIdentity()
 const icons:{widthPixels:number;heightPixels:number;data:Buffer}[]=[]
 // const icons=[256,512].map(size=>({widthPixels:size,heightPixels:size,data:fs.readFileSync(path.join(resources,'icons',`macplay-${size}.png`))}))
 const helperControl=new CpHelperSock()
-const config={deviceName:'MacPlay',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,disableAudioOutput:!settings.audioEnabled,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'MacPlay',icons,rightHandDrive:false}
+const config={deviceName:'MacPlay',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:settings.webCodec?settings.webCodec!=='h264':true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,disableAudioOutput:!settings.audioEnabled,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'MacPlay',icons,rightHandDrive:false}
 const sessions=new Set<CpStack>()
 let active: CpStack|undefined
 let wiredReady=false
@@ -74,12 +74,23 @@ for(const stream of [helper.stdout,helper.stderr]) readline.createInterface({inp
 })
 helper.on('error',e=>log('连接后端启动失败',e.message))
 helper.on('exit',code=>{if(!stopping){log('连接后端已退出',String(code));process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}})
+// Fork: settings.json path for the web client's display changes (declared before
+// the server below so the display-persist closure can reference it).
+const settingsFile = process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'settings.json')
 const server=net.createServer(socket=>{
  networkConnected=true;discovery?.networkConnected();
  socket.once('close',()=>{if(!active&&!stopping){networkConnected=false;discovery?.announce()}})
  const usbSession=wiredReady && !socket.remoteAddress?.endsWith('%'+settings.wifiInterface)
  diagnostic('control-connected',{family:socket.remoteFamily});if(!videoReady)log('收到连接请求','正在协商认证与音视频')
  const stack=new CpStack(config);sessions.add(stack)
+ // Fork: persist web-requested display/codec changes so an engine restart keeps them.
+ stack.onDisplayChange=cfg=>{
+  try{
+   const cur=JSON.parse(fs.readFileSync(settingsFile,'utf8'))
+   cur.width=cfg.width;cur.height=cfg.height;cur.fps=cfg.fps;cur.webCodec=cfg.codec
+   fs.writeFileSync(settingsFile, JSON.stringify(cur,null,2))
+  }catch(e){console.error('[engine] persist display settings failed:',(e as Error).message)}
+ }
  stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
  stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
  stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled)
@@ -133,7 +144,6 @@ startWebServer({
 // lid-closed operation while on AC power. Display sleep is unaffected
 // (deliberately no -d): closing the lid just turns the display off.
 let sleepBlocker: ChildProcess | undefined
-const settingsFile = process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'settings.json')
 function sleepSettingOn(): boolean {
   try {
     return JSON.parse(fs.readFileSync(settingsFile,'utf8')).preventSleepWhenConnected === true

@@ -46,6 +46,9 @@ export interface WebServerOpts {
   certDir: string
   getStack: () => TouchStack | undefined
   isVideoReady: () => boolean
+  // Fork: current video codec in use, so a display request without an explicit
+  // codec (e.g. "匹配本窗口像素") keeps streaming codec unchanged.
+  currentVideoCodec?: () => 'h264' | 'h265'
   // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
   // The pipeline taps decoded frames directly via MACPLAY_WEB_PORT.
 }
@@ -214,7 +217,9 @@ function handleTouchMessage(raw: string, opts: WebServerOpts): void {
       width: Math.max(320, Math.min(3840, Math.round(Number(msg.width) || 1280))),
       height: Math.max(240, Math.min(2160, Math.round(Number(msg.height) || 720))),
       fps: msg.fps === 30 ? 30 : 60,
-      codec: msg.codec === 'hevc' ? 'hevc' : 'h264',
+      codec: msg.codec === 'hevc' ? 'hevc'
+        : msg.codec === 'h264' ? 'h264'
+        : (opts.currentVideoCodec?.() === 'h265' ? 'hevc' : 'h264'),
       uiscale: [75, 85, 100, 115].includes(Number(msg.uiscale)) ? Number(msg.uiscale) : 100,
       matchWindow: !!msg.matchWindow,
     }
@@ -229,6 +234,9 @@ function handleTouchMessage(raw: string, opts: WebServerOpts): void {
 
 export function startWebServer(opts: WebServerOpts): http.Server {
   const clientPath = path.join(__dirname, 'webclient.html')
+  // Fork: expose the relay's live codec to message handlers; display requests
+  // without an explicit codec keep whatever is streaming now.
+  const optsWithCodec: WebServerOpts = { ...opts, currentVideoCodec: () => videoCodec }
   // Connected browser WebSockets; PCM audio frames are broadcast to all.
   const wsClients = new Set<net.Socket>()
   function broadcastAudio(frame: Buffer): void {
@@ -286,6 +294,40 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       return nal[off] & 0x1F
     }
   }
+  /** Fork: detect a start code followed by a run of 4-byte-BE-length-prefixed
+   * NALs covering the buffer exactly — what an unfixed Rust forwarder emits for
+   * a multi-NAL CarPlay access unit. Returns clean Annex B NALs (start code per
+   * NAL) or null when the buffer is already a plain Annex B NAL. */
+  function annexBFromLengthRun(buf: Buffer): Buffer[] | null {
+    if (buf.length < 10) return null
+    let off = 0
+    if (buf[0] === 0 && buf[1] === 0 && buf[2] === 1) off = 3
+    else if (buf[0] === 0 && buf[1] === 0 && buf[2] === 0 && buf[3] === 1) off = 4
+    else return null
+    const nals: Buffer[] = []
+    while (off + 4 <= buf.length) {
+      const len = buf.readUInt32BE(off)
+      off += 4
+      if (len === 0 || off + len > buf.length || len > buf.length) return null
+      const nal = buf.subarray(off, off + len)
+      if (nal.length < 2) return null
+      // plausibility: a real NAL header at every boundary
+      if (videoCodec === 'h265') { if (((nal[0] >> 1) & 0x3f) > 40) return null }
+      else { const t = nal[0] & 0x1f; if (t < 1 || t > 23) return null }
+      nals.push(Buffer.concat([Buffer.from([0, 0, 0, 1]), nal]))
+      off += len
+    }
+    if (off !== buf.length || nals.length < 2) return null
+    return nals
+  }
+
+  function sendNalToClients(nal: Buffer): void {
+    for (const sock of h264Clients) {
+      if ((sock as any).destroyed) { h264Clients.delete(sock); continue }
+      wsSendBinary(sock, nal)
+    }
+  }
+
   function broadcastH264(nal: Buffer): void {
     // First message from Rust is 1-byte codec identifier
     if (!codecReceived) {
@@ -295,6 +337,15 @@ export function startWebServer(opts: WebServerOpts): http.Server {
         console.error(`[webserver] video codec: ${videoCodec}`)
       }
       return
+    }
+    // Fork: an unfixed Rust forwarder may send one start code followed by a
+    // length-prefixed NAL run (whole access unit) — reframe before relaying.
+    if (nal.length > 4 && nal[0] === 0 && nal[1] === 0) {
+      const reframed = annexBFromLengthRun(nal)
+      if (reframed) {
+        for (const n of reframed) broadcastH264(n)
+        return
+      }
     }
     // Detect VPS (32) / SPS (33,7) / PPS (34,8) from Annex B NAL
     const type = getNalType(nal)
@@ -306,10 +357,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       if (type === 7) cachedSps = nal
       else if (type === 8) cachedPps = nal
     }
-    for (const sock of h264Clients) {
-      if ((sock as any).destroyed) { h264Clients.delete(sock); continue }
-      wsSendBinary(sock, nal)
-    }
+    sendNalToClients(nal)
   }
   function sendCachedConfig(sock: net.Socket): void {
     // Send codec as text message first, then config NALs
@@ -385,8 +433,9 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
         video: opts.isVideoReady() ? 'live' : 'waiting',
-        // Fork: MJPEG via GStreamer internal stream (passthrough mode).
-        mode: 'passthrough',
+        mode: process.env.MACPLAY_NO_DECODE === '1' ? 'zero-transcode' : 'passthrough',
+        codec: videoCodec,
+        httpsPort: opts.httpsPort,
       }))
       return
     }
@@ -450,7 +499,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       sock,
       (text) => {
         if (text.includes('"ping"')) { wsSendText(sock, JSON.stringify({ t: 'pong' })); return }
-        handleTouchMessage(text, opts)
+        handleTouchMessage(text, optsWithCodec)
       },
       (bin) => { forwardMic(bin) },
       remove,
@@ -495,47 +544,25 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     httpsServer.on('upgrade', (req, socket, head) =>
       server.emit('upgrade', req, socket, head) as unknown as void,
     )
+    httpsServer.on('clientError', (err: any, socket: net.Socket) => {
+      socket.destroy(err)
+    })
+    httpsServer.listen(opts.httpsPort, '0.0.0.0', () => {
+      console.error(
+        `[webserver] WebCodecs (HTTPS) -> https://<mac-lan-ip>:${opts.httpsPort}/`,
+      )
+    })
   } else {
     console.error('[webserver] HTTPS disabled (no cert); WebCodecs mode unavailable')
   }
 
-  // Fork: Protocol-adaptive listener. Peeks at the first byte to detect TLS
-  // (0x16 = TLS handshake). This lets browsers that default to HTTPS work
-  // without manually typing http:// or https:// — both protocols work on
-  // both ports.
-  function listenAdaptive(port: number, label: string) {
-    const tcpServer = net.createServer((socket) => {
-      // Peek at first chunk to detect TLS
-      socket.once('data', (chunk: Buffer) => {
-        const isTLS = chunk.length > 0 && chunk[0] === 0x16
-        if (isTLS && httpsServer && tlsCert) {
-          // TLS: wrap in TLSSocket and hand to HTTPS server
-          const tlsSocket = new tls.TLSSocket(socket, {
-            isServer: true,
-            key: tlsCert.key,
-            cert: tlsCert.cert,
-          })
-          // Push back the peeked data so TLS handshake can proceed
-          socket.unshift(chunk)
-          httpsServer.emit('connection', tlsSocket)
-        } else {
-          // Plain HTTP: hand to HTTP server
-          // Push back the peeked data so HTTP parsing can proceed
-          socket.unshift(chunk)
-          server.emit('connection', socket)
-        }
-      })
-      socket.on('error', () => {})
-    })
-    tcpServer.listen(port, '0.0.0.0', () => {
-      console.error(
-        `[webserver] ${label} -> http(s)://<mac-lan-ip>:${port}/ ` +
-        `(protocol auto-detected)`,
-      )
-    })
-  }
-
-  listenAdaptive(opts.httpPort, 'car browser')
-  listenAdaptive(opts.httpsPort, 'WebCodecs')
+  server.on('clientError', (err: any, socket: net.Socket) => {
+    socket.destroy(err)
+  })
+  server.listen(opts.httpPort, '0.0.0.0', () => {
+    console.error(
+      `[webserver] car browser (HTTP) -> http://<mac-lan-ip>:${opts.httpPort}/`,
+    )
+  })
   return server
 }

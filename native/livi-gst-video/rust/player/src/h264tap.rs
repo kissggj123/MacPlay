@@ -28,6 +28,9 @@ pub fn h264_port() -> Option<u16> {
 /// Attach to the pipeline's `h264sink` appsink and start serving. No-op
 /// unless `MACPLAY_H264_PORT` is set and the appsink exists.
 pub fn maybe_start(pipeline: &gstreamer::Pipeline) {
+    if std::env::var_os("MACPLAY_NO_DECODE").is_some() {
+        return;
+    }
     let port = match h264_port() {
         Some(p) => p,
         None => return,
