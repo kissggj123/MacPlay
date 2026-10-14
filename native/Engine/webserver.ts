@@ -385,8 +385,8 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
         video: opts.isVideoReady() ? 'live' : 'waiting',
-        // Fork (screen capture): tell the browser which mode to use.
-        mode: opts.getScreenFrame ? 'screencap' : 'passthrough',
+        // Fork: MJPEG via GStreamer internal stream (passthrough mode).
+        mode: 'passthrough',
       }))
       return
     }
