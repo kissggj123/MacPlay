@@ -19,6 +19,7 @@
  */
 import http from 'node:http'
 import https from 'node:https'
+import tls from 'node:tls'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
@@ -359,13 +360,6 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     sock.on('close', remove)
   })
 
-  server.listen(opts.httpPort, '0.0.0.0', () => {
-    console.error(
-      `[webserver] car browser -> http://<mac-lan-ip>:${opts.httpPort}/ ` +
-      `(mjpeg proxied from 127.0.0.1:${opts.mjpegPort})`,
-    )
-  })
-
   // Fork: HTTPS for WebCodecs (requires secure context). Self-signed cert
   // generated once via openssl, stored in certDir. The car browser will show
   // a cert warning on first visit — accept it once.
@@ -390,24 +384,58 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     }
   }
 
-  const tls = ensureCert()
-  if (tls) {
+  const tlsCert = ensureCert()
+  let httpsServer: https.Server | null = null
+  if (tlsCert) {
     // Reuse the same request/upgrade handlers for HTTPS.
-    const httpsServer = https.createServer(
-      { key: tls.key, cert: tls.cert },
+    httpsServer = https.createServer(
+      { key: tlsCert.key, cert: tlsCert.cert },
       (req, res) => server.emit('request', req, res) as unknown as void,
     )
     httpsServer.on('upgrade', (req, socket, head) =>
       server.emit('upgrade', req, socket, head) as unknown as void,
     )
-    httpsServer.listen(opts.httpsPort, '0.0.0.0', () => {
-      console.error(
-        `[webserver] WebCodecs -> https://<mac-lan-ip>:${opts.httpsPort}/ ` +
-        `(h264 passthrough from 127.0.0.1:${opts.h264Port})`,
-      )
-    })
   } else {
     console.error('[webserver] HTTPS disabled (no cert); WebCodecs mode unavailable')
   }
+
+  // Fork: Protocol-adaptive listener. Peeks at the first byte to detect TLS
+  // (0x16 = TLS handshake). This lets browsers that default to HTTPS work
+  // without manually typing http:// or https:// — both protocols work on
+  // both ports.
+  function listenAdaptive(port: number, label: string) {
+    const tcpServer = net.createServer((socket) => {
+      // Peek at first chunk to detect TLS
+      socket.once('data', (chunk: Buffer) => {
+        const isTLS = chunk.length > 0 && chunk[0] === 0x16
+        if (isTLS && httpsServer && tlsCert) {
+          // TLS: wrap in TLSSocket and hand to HTTPS server
+          const tlsSocket = new tls.TLSSocket(socket, {
+            isServer: true,
+            key: tlsCert.key,
+            cert: tlsCert.cert,
+          })
+          // Push back the peeked data so TLS handshake can proceed
+          socket.unshift(chunk)
+          httpsServer.emit('connection', tlsSocket)
+        } else {
+          // Plain HTTP: hand to HTTP server
+          // Push back the peeked data so HTTP parsing can proceed
+          socket.unshift(chunk)
+          server.emit('connection', socket)
+        }
+      })
+      socket.on('error', () => {})
+    })
+    tcpServer.listen(port, '0.0.0.0', () => {
+      console.error(
+        `[webserver] ${label} -> http(s)://<mac-lan-ip>:${port}/ ` +
+        `(protocol auto-detected)`,
+      )
+    })
+  }
+
+  listenAdaptive(opts.httpPort, 'car browser')
+  listenAdaptive(opts.httpsPort, 'WebCodecs')
   return server
 }
