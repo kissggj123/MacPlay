@@ -301,7 +301,7 @@ impl Player {
                     dec.property::<i32>("max-threads")
                 );
             }
-            install_decoder_probes(&dec, decoder);
+            install_decoder_probes(&dec, &decoder);
         }
         log_bus_messages(&player.pipeline);
         player.attach_view(handle);
