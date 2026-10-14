@@ -288,7 +288,13 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     if (url === '/' || url.startsWith('/?')) {
       let html: string
       try { html = fs.readFileSync(clientPath, 'utf8') } catch { html = FALLBACK_PAGE }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' })
+      // Fork: aggressive no-cache to ensure car browsers always get the latest page
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      })
       res.end(html)
       return
     }
