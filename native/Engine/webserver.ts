@@ -144,9 +144,24 @@ class WsParser {
   }
 }
 
+// Fork: WebRTC signaling handler (WheelPlay port).
+// Routes browser signaling messages to the WebRTC video sender.
+// Full implementation requires node-datachannel (see webrtc-sender.ts).
+function handleRtcSignaling(msg: any, opts: WebServerOpts): void {
+  // TODO: Wire to WebRTCVideoSender when node-datachannel is available.
+  // For now, log and ignore. The WebCodecs path remains primary.
+  console.error(`[webrtc] signaling: ${msg.type} (not yet implemented)`);
+}
+
 function handleTouchMessage(raw: string, opts: WebServerOpts): void {
   let msg: any
   try { msg = JSON.parse(raw) } catch { return }
+  // Fork: WebRTC signaling (WheelPlay port). These are handled by the
+  // WebRTC module, not the touch handler.
+  if (msg && typeof msg.type === 'string' && msg.type.indexOf('rtc-') === 0) {
+    handleRtcSignaling(msg, opts)
+    return
+  }
   const stack = opts.getStack()
   if (!stack) return
   if (msg && msg.t === 'touch' && Array.isArray(msg.touches)) {
