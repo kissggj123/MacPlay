@@ -7,7 +7,7 @@ REQUIRED_ARCHES=("$TARGET_ARCH")
 if [[ "$TARGET_ARCH" == universal ]]; then REQUIRED_ARCHES=(arm64 x86_64); fi
 source scripts/prepare-macos-runtime.sh
 NODE_BIN="${MACPLAY_NODE_BIN:-$NODE_BIN}"
-APP="${MACPLAY_APP_OUTPUT:-$PWD/dist/MacPlay.app}"
+APP="${MACPLAY_APP_OUTPUT:-$PWD/dist/NIO.app}"
 RES="$APP/Contents/Resources"
 RECEIVER="$RES/runtime/MacPlayReceiver.app"
 mkdir -p "$APP/Contents/MacOS" "$RES/runtime" "$RES/engine/node_modules" "$RES/driver" "$RES/gstreamer"
@@ -84,11 +84,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
-<key>CFBundleName</key><string>MacPlay-CarBrowser</string><key>CFBundleDisplayName</key><string>MacPlay-CarBrowser</string>
+<key>CFBundleName</key><string>NIO</string><key>CFBundleDisplayName</key><string>NIO</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.2.2</string><key>CFBundleVersion</key><string>36</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
-<key>NSHighResolutionCapable</key><true/>
+<key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
 <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
 <key>NSBluetoothAlwaysUsageDescription</key><string>MacPlay通过Mac蓝牙与iPhone建立CarPlay连接。</string>
 <key>NSLocalNetworkUsageDescription</key><string>MacPlay通过本地网络接收iPhone的CarPlay音视频。</string>
@@ -116,8 +116,8 @@ codesign --force --deep --sign - "$APP"
 if [[ "${1:-}" != "--app-only" ]]; then
  mkdir -p build/dmg
  ln -sfn /Applications build/dmg/Applications
- rm -rf build/dmg/MacPlay.app
- ditto "$APP" build/dmg/MacPlay.app
+ rm -rf build/dmg/NIO.app
+ ditto "$APP" build/dmg/NIO.app
 
- hdiutil create -ov -volname MacPlay-CarBrowser -srcfolder build/dmg -format UDZO "dist/MacPlay-1.2.2-${TARGET_ARCH}.dmg"
+ hdiutil create -ov -volname NIO -srcfolder build/dmg -format UDZO "dist/NIO-1.2.2-${TARGET_ARCH}.dmg"
 fi

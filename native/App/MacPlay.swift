@@ -1074,6 +1074,10 @@ struct SettingsView: View {
                 HStack {
                     if model.receivingOrWaiting {Button(L("停止接收")){model.stop()}}
                     if model.running {Button(L(showLogConsole ? "隐藏日志" : "日志控制台")){showLogConsole.toggle()}}
+                    // Dock icon is hidden (LSUIElement): Cmd+Q has no menu, so
+                    // the window needs an explicit quit affordance.
+                    Button(L("退出")){NSApp.terminate(nil)}
+                        .help(L("退出 MacPlay"))
                     Spacer()
                     Button(L(model.running ? "应用并重新连接" : "启动接收")){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
@@ -1108,7 +1112,7 @@ private struct MainWindowContent: View {
     @NSApplicationDelegateAdaptor(MacPlayApplicationDelegate.self) private var delegate
     @StateObject private var model=PlayModel()
     var body:some Scene {
-        Window("MacPlay",id:"main") {MainWindowContent(model:model,delegate:delegate)}
+        Window("NIO",id:"main") {MainWindowContent(model:model,delegate:delegate)}
             .defaultSize(width:820,height:650)
             .commands {CommandGroup(replacing:.newItem){};CommandGroup(after:.appInfo){Button(L("启动接收")){model.start()};Button(L("停止接收")){model.stop()}}}
     }
