@@ -38,9 +38,9 @@ jobs:
           GST_VERSION="1.28.7"
           BASE="https://gstreamer.freedesktop.org/data/pkg/osx/${GST_VERSION}"
           cd /tmp
-          curl -fL --http1.1 --retry 5 --retry-delay 5 -o gst-runtime.pkg \
+          curl -fL --retry 3 -o gst-runtime.pkg \
             "${BASE}/gstreamer-1.0-${GST_VERSION}-universal.pkg"
-          curl -fL --http1.1 --retry 5 --retry-delay 5 -o gst-devel.pkg \
+          curl -fL --retry 3 -o gst-devel.pkg \
             "${BASE}/gstreamer-1.0-devel-${GST_VERSION}-universal.pkg"
           sudo installer -pkg /tmp/gst-runtime.pkg -target /
           sudo installer -pkg /tmp/gst-devel.pkg -target /
