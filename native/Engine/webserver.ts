@@ -297,9 +297,18 @@ export function startWebServer(opts: WebServerOpts): http.Server {
   function startAudioRelay(): void {
     const sock = net.connect(opts.audioPort, '127.0.0.1')
     let buf = Buffer.alloc(0)
+    // Fork: diagnostics for "browser gets no audio" — show whether the relay
+    // ever connects and how many bytes/s flow from the Rust tap.
+    let audioBytes = 0, audioLogAt = Date.now()
     const reconnect = () => { setTimeout(startAudioRelay, 2000).unref?.() };
-    sock.on('connect', () => { buf = Buffer.alloc(0) })
+    sock.on('connect', () => { buf = Buffer.alloc(0); console.log('[webserver] audio relay connected :' + opts.audioPort) })
     sock.on('data', (chunk: Buffer) => {
+      audioBytes += chunk.length
+      const now = Date.now()
+      if (now - audioLogAt >= 10000) {
+        console.log('[webserver] audio relay traffic', Math.round(audioBytes / ((now - audioLogAt) / 1000)), 'B/s')
+        audioBytes = 0; audioLogAt = now
+      }
       buf = Buffer.concat([buf, chunk])
       while (buf.length >= 4) {
         const len = buf.readUInt32BE(0)
@@ -308,7 +317,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
         buf = buf.subarray(4 + len)
       }
     })
-    sock.on('error', () => { /* reconnect below */ })
+    sock.on('error', (e) => { console.log('[webserver] audio relay error:', (e as Error).message) })
     sock.on('close', reconnect)
   }
   startAudioRelay()
