@@ -12,7 +12,8 @@
   "dependencies": {
     "livi-crypto": "workspace:*",
     "livi-gst-video": "workspace:*",
-    "multicast-dns": "7.2.5"
+    "multicast-dns": "7.2.5",
+    "node-datachannel": "^0.33.4"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

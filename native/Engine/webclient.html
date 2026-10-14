@@ -50,6 +50,8 @@
 <div id="waiting">正在等待 CarPlay 视频…<br>请确认 Mac 上的 MacPlay 已连接 iPhone</div>
 <img id="v" alt="" draggable="false">
 <canvas id="c"></canvas>
+<!-- Fork: WebRTC video element (WheelPlay port) -->
+<video id="rtcvideo" autoplay muted playsinline style="position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;display:none;background:#000"></video>
 <div id="hud"></div>
 <div id="hint">触摸屏幕操作 CarPlay</div>
 <button id="mutebtn" class="tbtn" title="静音/取消静音">🔊</button>
@@ -239,7 +241,74 @@
     }catch(e){}
   }
 
+  // Fork: WebRTC receiver, ported from WheelPlay (fython/wheelplay)
+  // Uses libdatachannel on the Mac side, standard WebRTC API here.
+  function createRtcReceiver(video, send){
+    var pc=null, ready=false;
+    function close(){
+      if(pc){ try{pc.close();}catch(e){} pc=null; }
+      ready=false; video.srcObject=null; video.style.display='none';
+    }
+    async function receive(msg){
+      if(msg.type==='rtc-stop'){ close(); return; }
+      if(msg.type!=='rtc-offer') return;
+      close();
+      try{
+        pc=new RTCPeerConnection({iceServers:[]});
+        pc.ontrack=function(ev){
+          video.srcObject=ev.streams[0]||new MediaStream([ev.track]);
+          video.style.display='block';
+          canvas.style.display='none'; img.style.display='none';
+          video.play().then(function(){
+            ready=true;
+            document.getElementById('waiting').style.display='none';
+            send({type:'rtc-ready', id:msg.id});
+          }).catch(function(){});
+        };
+        pc.onconnectionstatechange=function(){
+          if(pc.connectionState==='failed'||pc.connectionState==='closed'){
+            close();
+          }
+        };
+        await pc.setRemoteDescription({type:'offer', sdp:msg.sdp});
+        var answer=await pc.createAnswer();
+        // WheelPlay critical fix: browser must be DTLS server
+        // (MbedTLS cannot handle fragmented ClientHello)
+        var sdp=answer.sdp.replace(/a=setup:active/g, 'a=setup:passive');
+        await pc.setLocalDescription({type:answer.type, sdp:sdp});
+        // Wait for ICE gathering
+        if(pc.iceGatheringState==='complete'){
+          send({type:'rtc-answer', id:msg.id, sdp:pc.localDescription.sdp});
+        }else{
+          pc.onicegatheringstatechange=function(){
+            if(pc.iceGatheringState==='complete'){
+              send({type:'rtc-answer', id:msg.id, sdp:pc.localDescription.sdp});
+            }
+          };
+        }
+      }catch(e){
+        console.error('[webrtc] failed:', e);
+        close();
+      }
+    }
+    return {receive:receive, close:close, get ready(){return ready;}};
+  }
+
+  var rtcReceiver=null;
+  var rtcVideo=document.getElementById('rtcvideo');
+
+  function startWebRTC(sendFn){
+    // Hide WebCodecs canvas, show WebRTC video
+    canvas.style.display='none'; img.style.display='none';
+    rtcVideo.style.display='block';
+    rtcReceiver=createRtcReceiver(rtcVideo, sendFn);
+    return rtcReceiver;
+  }
+
   function startWebCodecs(){
+    // Hide WebRTC video if active
+    if(rtcReceiver){ rtcReceiver.close(); rtcReceiver=null; }
+    rtcVideo.style.display='none';
     canvas.style.display='block'; img.style.display='none';
     ctx2d=canvas.getContext('2d');
     videoDecoder=new VideoDecoder({
@@ -456,7 +525,22 @@
     ws.onopen=function(){ wsReady=true; };
     ws.onclose=function(){ wsReady=false; setTimeout(connect,2000); };
     ws.onerror=function(){ try{ws.close();}catch(e){} };
-    ws.onmessage=function(ev){ if(typeof ev.data!=='string') playAudioPacket(ev.data); };
+    ws.onmessage=function(ev){
+      if(typeof ev.data==='string'){
+        // Fork: WebRTC signaling messages
+        try{
+          var msg=JSON.parse(ev.data);
+          if(msg.type&&msg.type.indexOf('rtc-')===0&&rtcReceiver){
+            rtcReceiver.receive(msg);
+            return;
+          }
+        }catch(e){}
+      }
+      if(typeof ev.data!=='string') playAudioPacket(ev.data);
+    };
+    // Fork: start WebRTC receiver (WheelPlay port)
+    // The Mac will send rtc-offer via this WebSocket when video is available
+    startWebRTC(function(msg){ send(msg); });
   }
   connect();
   setInterval(function(){ send({t:'ping'}); },20000);
