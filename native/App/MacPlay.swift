@@ -706,6 +706,22 @@ struct PlaySettings: Codable {
         stop(restoreMain:false,preserveReconnect:isFallback || isAutomatic);inspectCredentials()
         settings.bluetoothMAC=IOBluetoothHostController.default()?.addressAsString()?.replacingOccurrences(of:"-",with:":") ?? ""
         guard credentialsReady else {status="缺少认证文件";detail="请在关于页面导入有使用权限的配套认证文件。";return}
+        // Fork: auto-detect current WiFi and switch profile on start
+        if settings.wireless {
+            if let interface = CWWiFiClient.shared().interface(withName: settings.wifiInterface),
+               let actualSSID = interface.ssid(), !actualSSID.isEmpty,
+               actualSSID != settings.ssid {
+                settings.ssid = actualSSID
+                settings.accessPointMAC = interface.bssid()
+                if let savedPassword = settings.wifiProfiles[actualSSID], !savedPassword.isEmpty {
+                    settings.password = savedPassword
+                    passwordStatus = "已自动切换到网络 \(actualSSID) 并填入已保存的密码。"
+                } else {
+                    settings.password = ""
+                    passwordStatus = "已自动切换到网络 \(actualSSID)，请填写密码。"
+                }
+            }
+        }
         if settings.wireless && currentNetworkIsEnterprise {
             status="当前Wi-Fi采用企业认证";detail="无线CarPlay握手不支持802.1X用户名/密码或证书，请改用个人Wi-Fi、热点或USB连接。";return
         }
