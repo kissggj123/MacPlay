@@ -162,7 +162,7 @@ struct MacPlayAboutView: View {
             Text(L("• WebCodecs 硬解 / MJPEG 自动回退")).font(.callout)
             Text(L("• 分流音频混音器 / 浏览器麦克风回传")).font(.callout)
             Text(L("• Focus 模式 / 显示设置 / 安全边距")).font(.callout)
-            Text(L("在车机浏览器打开 http://<Mac-IP>:8080")).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            Text(L("在车机浏览器打开 http://<Mac-IP>:8080（HTTPS: https://<Mac-IP>:8443）")).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
         }
         Section(L("致谢")) {
             Text(L("基于 Roylyl/MacPlay，移植 youcci/playport 功能，借鉴 fython/wheelplay 设计")).font(.callout).foregroundStyle(.secondary)
