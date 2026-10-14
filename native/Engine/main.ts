@@ -96,7 +96,10 @@ const server=net.createServer(socket=>{
  stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
  stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
  stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled!==false&&browserClientCount()>0)
- stack.on('session-active',()=>{sessionReady=true;frameRateGuard.negotiationStarted();armDeadline();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);if(!videoReady)log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流');syncSleepAssertion()})
+ stack.on('session-active',()=>{sessionReady=true;frameRateGuard.negotiationStarted();armDeadline();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);if(!videoReady)log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流');syncSleepAssertion();
+  // Fork: session may come up with no browser attached (audio starts into
+  // nowhere) — pause the phone once the HID channel is ready.
+  if(browserClientCount()===0)setTimeout(()=>{if(browserClientCount()===0){try{stack.sendMedia(2)}catch{}}},1500)})
  stack.on('disconnect-reason',(reason:string)=>{disconnectReason=reason})
  stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;syncSleepAssertion();log(disconnectReason,'重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
  stack.on('host-ui-requested',()=>{process.stdout.write(JSON.stringify({showMain:true})+'\n');diagnostic('show-main')})
@@ -143,6 +146,10 @@ const webServer=startWebServer({
   // Bluetooth headphone); whichever device opens a browser gets the sound.
   onBrowserClients:(connected)=>{
     for(const stack of sessions){try{stack.setAudioActive(connected)}catch(e){console.error('[audio-route]',e)}}
+    // Actual pause/resume on the phone via the CarPlay media HID key
+    // (1=Play 0xB0, 2=Pause 0xB1) — setAudioActive alone only stops the
+    // local sink and the phone keeps "playing" into nowhere.
+    try{active?.sendMedia(connected?1:2)}catch(e){console.error('[audio-key]',e)}
   },
   // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
   // No getScreenFrame = use internal pipeline, not external screencapture.
