@@ -488,13 +488,16 @@ struct PlaySettings: Codable {
         if let channel=interface.wlanChannel(){settings.channel=Int(channel.channelNumber)}
         if let ssid=interface.ssid(), !ssid.isEmpty {
             if settings.ssid != ssid {
-                // Fork: auto-fill password from saved WiFi profiles
+                // Fork: auto-fill password from saved WiFi profiles, else read
+                // it from the keychain automatically (first time this shows one
+                // system dialog — 始终允许 — and it is cached locally forever).
                 if let savedPassword = settings.wifiProfiles[ssid], !savedPassword.isEmpty {
                     settings.password = savedPassword
                     passwordStatus = "已自动填入已保存的网络密码。"
                 } else {
                     settings.password = ""
-                    passwordStatus = "网络已切换，请读取或填写当前网络密码。"
+                    passwordStatus = "网络已切换，正在自动读取密码…"
+                    readSavedNetworkPassword()
                 }
             }
             settings.ssid=ssid
@@ -535,7 +538,7 @@ struct PlaySettings: Codable {
         let ssid=settings.ssid
         guard !ssid.isEmpty else {passwordStatus="请先读取当前网络名称。";return}
         readingPassword=true
-        passwordStatus="正在读取钥匙串；如有系统提示，请授权MacPlay访问该网络密码。"
+        passwordStatus="正在读取钥匙串；系统弹出授权时请点击「始终允许」，之后不再询问。"
         Task {
             let result=await Task.detached { () -> (OSStatus, String?) in
                 var length: UInt32=0
@@ -554,13 +557,18 @@ struct PlaySettings: Codable {
             guard settings.ssid==ssid else {passwordStatus="网络已切换，请重新读取密码。";return}
             if result.0==errSecSuccess,let password=result.1,!password.isEmpty {
                 settings.password=password
-                passwordStatus="已读取保存的密码，点击“应用并重新连接”使用网络凭据。"
+                // Cache locally so future sessions never touch the keychain
+                // again (app updates re-sign the binary and invalidate the
+                // keychain ACL — the local cache survives all of that).
+                settings.wifiProfiles[ssid]=password
+                persistPreferences()
+                passwordStatus="已读取并记住密码，之后无需再授权。"
             } else if result.0==errSecSuccess {
                 passwordStatus="钥匙串未返回可用密码，请手动填写。"
             } else if result.0==errSecItemNotFound {
                 passwordStatus="钥匙串未找到该网络的可读取密码，请手动填写。"
             } else if result.0==errSecUserCanceled || result.0==errSecAuthFailed || result.0==errSecInteractionNotAllowed {
-                passwordStatus="未获准读取网络密码（系统状态码\(result.0)），请重新授权或手动填写。"
+                passwordStatus="未获准读取（系统状态码\(result.0)）。重试并在系统弹窗选「始终允许」，或手动填写一次即可永久记住。"
             } else {
                 let explanation=SecCopyErrorMessageString(result.0,nil) as String? ?? ""
                 passwordStatus="无法读取网络密码（系统状态码\(result.0)），请手动填写。"+(explanation.isEmpty ? "" : "\n"+explanation)
