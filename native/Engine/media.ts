@@ -35,7 +35,13 @@ export function openScreenReceiver(id:number,key:Buffer):number {
   if(receivers.get(id)!==token)return
   videoGeneration++;firstFramePending=true
   if(player) addon.stop(player)
-  const handle=headless()?Buffer.alloc(0):(windowHandle ?? (windowHandle=addon.macplayPrepareVideoWindow(aspect)))
+  // Fork: headless mode skips native player entirely (no decoder needed).
+  // Video goes straight to web streaming via the Rust pipeline.
+  if(headless()){
+    player=0
+    return
+  }
+  const handle=(windowHandle ?? (windowHandle=addon.macplayPrepareVideoWindow(aspect)))
   player=addon.createPlayer(codec===1?'h265':'h264',handle,atom,id)
   if(!player) throw new Error('无法创建CarPlay视频解码器')
   addon.start(player); addon.setContentRegion(player,0,0,aspect*1000,1000,aspect*1000,1000)
