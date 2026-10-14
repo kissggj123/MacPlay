@@ -810,24 +810,32 @@
   // resolution is only worth matching to the window ONCE, here at load time,
   // because changing it renegotiates the CarPlay session (visible restart).
   // Resizes after that are pure CSS — no renegotiation, no hiccup.
-  var sentFit=false;
+  var sentFit=false, probeAnswered=null;
+  // Fork: smart remembered resolution. First visit on a browser defaults to
+  // 1080P (instead of raw window pixels); the negotiated size is remembered in
+  // localStorage per browser, so the next session reuses it instantly. Only a
+  // big window change (>15%) renegotiates. Wired sessions never switch.
+  function maybeSendFit(answer){
+    if(sentFit||answer===false) return;
+    var dpr=window.devicePixelRatio||1;
+    var cw=Math.round(window.innerWidth*dpr), ch=Math.round(window.innerHeight*dpr);
+    if(cw<320||ch<240) return;
+    var saved=null;
+    try{ saved=JSON.parse(localStorage.getItem('nioDisplay')||'null'); }catch(e){}
+    var w,h;
+    if(saved&&saved.w>0){ w=saved.w; h=saved.h; } else { w=1920; h=1080; }
+    if(saved&&(Math.abs(cw-saved.w)/saved.w>0.15||Math.abs(ch-saved.h)/saved.h>0.15)){ w=cw; h=ch; }
+    sentFit=true;
+    try{ localStorage.setItem('nioDisplay',JSON.stringify({w:w,h:h})); }catch(e){}
+    send({t:'display', width:w, height:h, matchWindow:true});
+  }
   function sendFit(){
     if(sentFit) return;
-    var dpr=window.devicePixelRatio||1;
-    var w=Math.round(window.innerWidth*dpr), h=Math.round(window.innerHeight*dpr);
-    if(w<320||h<240) return;
-    // Fork: smart switching — ask the server first. Wired (USB) sessions veto
-    // every display change (the phone never reconnects after the drop), so on
-    // USB we never send the request at all and rely on pure CSS scaling.
-    sentFit=true;
+    // Ask whether switching is possible (wired sessions veto it); fall back to
+    // sending if the probe goes unanswered.
     send({t:'displayProbe'});
-    var probeWaited=0;
-    var probeTimer=setInterval(function(){
-      probeWaited+=100;
-      if(probeAnswered||probeWaited>1500){ clearInterval(probeTimer); if(probeAnswered===true||probeAnswered==null){ send({t:'display', width:w, height:h, matchWindow:true}); } }
-    },100);
+    setTimeout(function(){ maybeSendFit(probeAnswered==null?true:probeAnswered); },400);
   }
-  var probeAnswered=null;
   // First report once the control channel is up.
   var origConnect=connect;
   connect=function(){
