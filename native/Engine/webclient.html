@@ -507,8 +507,9 @@
       var data=new Uint8Array(ev.data); bytesCount+=data.length;
       var units=parseNalUnits(data);
       for(var i=0;i<units.length;i++) feedNal(units[i]);
-      // a stalled partial access unit is flushed by age
-      if(auBuf.length&&Date.now()-auPendingSince>150) flushAu();
+      // Old server format: each message is a complete frame, flush immediately
+      // (don't wait 150ms for auBuf)
+      if(auBuf.length) flushAu();
       var hasConfig = videoCodec==='h265' ?
         (spsPps&&spsPps.vps&&spsPps.sps&&spsPps.pps) :
         (spsPps&&spsPps.sps&&spsPps.pps);
