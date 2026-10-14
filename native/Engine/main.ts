@@ -14,7 +14,6 @@ import { FrameRateFallback, VideoWaitDeadline } from './frameRateFallback'
 import { acceptsPhone } from './phoneSelection'
 import { audioLevel, disconnectedAfterSession } from './runtimeControls'
 import { startWebServer } from './webserver'
-import { startScreenCapture, stopScreenCapture, getLatestFrame, isCapturing } from './screencap'
 
 const resources=process.env.MACPLAY_RESOURCES!
 const settings=JSON.parse(fs.readFileSync(process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'settings.json'),'utf8'))
@@ -112,24 +111,9 @@ process.env.MACPLAY_WEB_PORT ||= '18081'
 process.env.MACPLAY_WEB_AUDIO_PORT ||= '18082'
 process.env.MACPLAY_H264_PORT ||= '18083'
 process.env.MACPLAY_MIC_PORT ||= '18084'
-// Fork (screen capture): when settings.screenCapture is true, capture the
-// native CarPlay window with macOS screencapture and serve it as MJPEG.
-// This is the fallback when H.265/WebCodecs passthrough can't be used.
-// The native window must exist (NOT headless) for capture to work.
-function screenCaptureEnabled(): boolean {
-  try {
-    return JSON.parse(fs.readFileSync(settingsFile,'utf8')).screenCapture === true
-  } catch { return false }
-}
-function syncScreenCapture(): void {
-  const want = !stopping && screenCaptureEnabled() && videoReady
-  if (want && !isCapturing()) {
-    startScreenCapture()
-  } else if (!want && isCapturing()) {
-    // Keep capturing while video is live; stop on disconnect.
-    if (!videoReady) stopScreenCapture()
-  }
-}
+// Fork: MJPEG via GStreamer internal stream (websink).
+// The pipeline taps decoded frames directly (MACPLAY_WEB_PORT mode),
+// no external screencapture needed.
 startWebServer({
   httpPort:Number(process.env.MACPLAY_WEB_HTTP_PORT||'8080'),
   httpsPort:Number(process.env.MACPLAY_WEB_HTTPS_PORT||'8443'),
@@ -140,8 +124,8 @@ startWebServer({
   certDir:path.join(dataDir,'certs'),
   getStack:()=>active,
   isVideoReady:()=>videoReady,
-  // Fork (screen capture): serve MJPEG from the captured window when enabled.
-  getScreenFrame: screenCaptureEnabled() ? getLatestFrame : undefined,
+  // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
+  // No getScreenFrame = use internal pipeline, not external screencapture.
 })
 // Fork: optional no-sleep while CarPlay is connected
 // (settings: preventSleepWhenConnected, toggled in the app's settings UI).
@@ -245,5 +229,5 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 })
 const startupDeadline=setTimeout(()=>{if(!stopping&&!videoReady){disconnectReason='连接启动超时';diagnostic('handoff-summary',discovery?.summary());log(disconnectReason);process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}},90000)
 let stopping=false
-function shutdown(){if(stopping)return;stopping=true;syncSleepAssertion();stopScreenCapture();discovery?.destroy();clearTimeout(startupDeadline);videoDeadline.cancel();frameRateGuard.cancel();clearInterval(pump);clearInterval(mediaStats);for(const s of sessions)s.stop();addon.macplayCloseVideoWindow();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
+function shutdown(){if(stopping)return;stopping=true;syncSleepAssertion();discovery?.destroy();clearTimeout(startupDeadline);videoDeadline.cancel();frameRateGuard.cancel();clearInterval(pump);clearInterval(mediaStats);for(const s of sessions)s.stop();addon.macplayCloseVideoWindow();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);process.stdin.on('end',shutdown)

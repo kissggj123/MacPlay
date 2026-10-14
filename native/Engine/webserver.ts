@@ -46,10 +46,8 @@ export interface WebServerOpts {
   certDir: string
   getStack: () => TouchStack | undefined
   isVideoReady: () => boolean
-  // Fork (screen capture): when set, /mjpeg serves multipart JPEGs from this
-  // callback (captured from the native CarPlay window) instead of proxying
-  // the Rust GStreamer tap. Null = no frame yet.
-  getScreenFrame?: () => Buffer | null
+  // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
+  // The pipeline taps decoded frames directly via MACPLAY_WEB_PORT.
 }
 
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
@@ -393,43 +391,9 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       return
     }
     if (url === '/mjpeg') {
-      // Fork (screen capture): serve multipart MJPEG from the captured
-      // native window instead of proxying the Rust GStreamer tap.
-      if (opts.getScreenFrame) {
-        const boundary = 'macplayframe'
-        res.writeHead(200, {
-          'Content-Type': `multipart/x-mixed-replace; boundary=${boundary}`,
-          'Cache-Control': 'no-cache',
-          'Connection': 'close',
-          'Pragma': 'no-cache',
-        })
-        // ~12 fps; skip if no frame yet (browser <img> will retry).
-        const timer = setInterval(() => {
-          let frame: Buffer | null = null
-          try { frame = opts.getScreenFrame!() } catch { /* ignore */ }
-          if (!frame || frame.length < 1024) return
-          try {
-            res.write(`--${boundary}\r\n`)
-            res.write(`Content-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`)
-            res.write(frame)
-            res.write('\r\n')
-          } catch {
-            clearInterval(timer)
-          }
-        }, 83)
-        req.on('close', () => clearInterval(timer))
-        // Send a frame immediately if one is ready.
-        try {
-          const first = opts.getScreenFrame()
-          if (first && first.length >= 1024) {
-            res.write(`--${boundary}\r\n`)
-            res.write(`Content-Type: image/jpeg\r\nContent-Length: ${first.length}\r\n\r\n`)
-            res.write(first)
-            res.write('\r\n')
-          }
-        } catch { /* ignore */ }
-        return
-      }
+      // Fork: proxy the Rust GStreamer websink (internal stream).
+      // The pipeline taps decoded frames directly via MACPLAY_WEB_PORT,
+      // no external screencapture needed.
       const proxy = http.get(
         { host: '127.0.0.1', port: opts.mjpegPort, path: '/mjpeg' },
         (pres) => {
