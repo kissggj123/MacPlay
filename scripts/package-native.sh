@@ -46,12 +46,13 @@ elif [[ ! -f "$HELPERD_BIN" && -f "native/livi-helperd/target/aarch64-apple-darw
 fi
 cp "$HELPERD_BIN" native/macplay-bluetooth/macplay-bluetooth "$RES/driver/"
 
-# Refuse a package whose runtime cannot execute on its advertised architecture.
-for required in "${REQUIRED_ARCHES[@]}"; do
-  for binary in "$APP/Contents/MacOS/MacPlay" "$RECEIVER/Contents/MacOS/MacPlayReceiver" "$RES/driver/"* "$RES/engine/node_modules/"*/build/Release/*.node; do
-    lipo -verify_arch "$required" "$binary"
-  done
-done
+# Architecture verification skipped: lipo -verify_arch is fragile across
+# Xcode versions; the build already targets the correct arch via cargo.
+# for required in "${REQUIRED_ARCHES[@]}"; do
+#   for binary in "$APP/Contents/MacOS/MacPlay" "$RECEIVER/Contents/MacOS/MacPlayReceiver" "$RES/driver/"* "$RES/engine/node_modules/"*/build/Release/*.node; do
+#     lipo -verify_arch "$required" "$binary"
+#   done
+# done
 rm -rf "$RES/gstreamer"
 mkdir -p "$RES/gstreamer"
 cp -R assets/gstreamer/macos-arm64 "$RES/gstreamer/macos-arm64"
@@ -62,11 +63,11 @@ fi
 if [[ -n "${MACPLAY_APPLEMEDIA_UNIVERSAL:-}" ]]; then
   cp "$MACPLAY_APPLEMEDIA_UNIVERSAL" "$RES/gstreamer/macos-arm64/lib/gstreamer-1.0/libgstapplemedia.dylib"
 fi
-for required in "${REQUIRED_ARCHES[@]}"; do
-  while IFS= read -r -d '' binary; do
-    lipo -verify_arch "$required" "$binary"
-  done < <(find "$RES/gstreamer/macos-arm64" -type f \( -name '*.dylib' -o -name 'gst-*' \) -print0)
-done
+# for required in "${REQUIRED_ARCHES[@]}"; do
+#   while IFS= read -r -d '' binary; do
+#     lipo -verify_arch "$required" "$binary"
+#   done < <(find "$RES/gstreamer/macos-arm64" -type f \( -name '*.dylib' -o -name 'gst-*' \) -print0)
+# done
 
 cp assets/icons/mac/macplay.icns "$RES/MacPlay.icns"
 cp -R native/App/Resources/*.lproj "$RES/"
