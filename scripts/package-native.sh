@@ -21,7 +21,7 @@ cat > "$RECEIVER/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay.receiver</string>
-<key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
+<key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay-CarBrowser</string>
 <key>CFBundleExecutable</key><string>MacPlayReceiver</string><key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.2.2</string><key>CFBundleVersion</key><string>36</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -84,7 +84,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
-<key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
+<key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay-CarBrowser</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.2.2</string><key>CFBundleVersion</key><string>36</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -110,5 +110,5 @@ if [[ "${1:-}" != "--app-only" ]]; then
  rm -rf build/dmg/MacPlay.app
  ditto "$APP" build/dmg/MacPlay.app
 
- hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO "dist/MacPlay-1.2.2-${TARGET_ARCH}.dmg"
+ hdiutil create -ov -volname MacPlay-CarBrowser -srcfolder build/dmg -format UDZO "dist/MacPlay-1.2.2-${TARGET_ARCH}.dmg"
 fi
