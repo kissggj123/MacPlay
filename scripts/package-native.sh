@@ -3,6 +3,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 TARGET_ARCH="${MACPLAY_ARCH:-$(uname -m)}"
 case "$TARGET_ARCH" in x64) TARGET_ARCH=x86_64;; aarch64) TARGET_ARCH=arm64;; esac
+# Version scheme: 1.3.0.<build>. The build number auto-increments on every
+# package run — each DMG delivery is one revision (8901, 8902, ...).
+APP_VERSION="1.3.0"
+BUILD_FILE="scripts/BUILD_NUMBER"
+BUILD_NUM=$(( $(cat "$BUILD_FILE") + 1 ))
+echo "$BUILD_NUM" > "$BUILD_FILE"
+echo "Packaging NIO Play ${APP_VERSION}.${BUILD_NUM} (${TARGET_ARCH})"
 REQUIRED_ARCHES=("$TARGET_ARCH")
 if [[ "$TARGET_ARCH" == universal ]]; then REQUIRED_ARCHES=(arm64 x86_64); fi
 source scripts/prepare-macos-runtime.sh
@@ -16,14 +23,14 @@ mkdir -p "$RECEIVER/Contents/MacOS" "$RECEIVER/Contents/Resources"
 cp "$NODE_BIN" "$RECEIVER/Contents/MacOS/MacPlayReceiver"
 rm -f "$RES/runtime/node"
 cp assets/icons/mac/macplay.icns "$RECEIVER/Contents/Resources/MacPlay.icns"
-cat > "$RECEIVER/Contents/Info.plist" <<'PLIST'
+cat > "$RECEIVER/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay.receiver</string>
 <key>CFBundleName</key><string>MacPlay-CarBrowser</string><key>CFBundleDisplayName</key><string>MacPlay-CarBrowser</string>
 <key>CFBundleExecutable</key><string>MacPlayReceiver</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.2.2</string><key>CFBundleVersion</key><string>36</string>
+<key>CFBundleShortVersionString</key><string>${APP_VERSION}</string><key>CFBundleVersion</key><string>${BUILD_NUM}</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
 <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
@@ -79,14 +86,14 @@ cp assets/authentication/identity.pk8 assets/authentication/certificate.p7b asse
 cp LICENSE NOTICE "$RES/"
 cp -R assets/licenses "$RES/ThirdParty-LICENSES"
 cp -R assets/gstreamer/LICENSES "$RES/GStreamer-LICENSES"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
 <key>CFBundleName</key><string>NIO Play</string><key>CFBundleDisplayName</key><string>NIO Play</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.2.2</string><key>CFBundleVersion</key><string>36</string>
+<key>CFBundleShortVersionString</key><string>${APP_VERSION}</string><key>CFBundleVersion</key><string>${BUILD_NUM}</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
@@ -131,5 +138,5 @@ if [[ "${1:-}" != "--app-only" ]]; then
  rm -rf build/dmg/NIO.app
  ditto "$APP" build/dmg/NIO.app
 
- hdiutil create -ov -volname "NIO Play" -srcfolder build/dmg -format UDZO "dist/NIOPlay-1.2.2-${TARGET_ARCH}.dmg"
+ hdiutil create -ov -volname "NIO Play" -srcfolder build/dmg -format UDZO "dist/NIOPlay-${APP_VERSION}.${BUILD_NUM}-${TARGET_ARCH}.dmg"
 fi

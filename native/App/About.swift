@@ -55,7 +55,7 @@ struct GitHubRelease: Decodable {
         }
     }
     private let defaults = UserDefaults.standard
-    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.2" }
+    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0" }
     var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "" }
     var architecture: String {
         #if arch(arm64)
@@ -156,13 +156,13 @@ struct AboutHeroCard: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("NIO Play").font(.system(size: 20, weight: .bold))
                 HStack(spacing: 8) {
-                    Text("v\(updates.currentVersion)")
+                    Text("v\(updates.currentVersion).\(updates.build)")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(Capsule().fill(LinearGradient.rainbow))
-                    Text("\(updates.build) · \(updates.architecture)").font(.caption).foregroundStyle(.secondary)
+                    Text(updates.architecture).font(.caption).foregroundStyle(.secondary)
                 }
                 Text(L("将 Mac 变成 CarPlay 接收器，串流到车机浏览器显示和操作"))
                     .font(.caption).foregroundStyle(.secondary)
