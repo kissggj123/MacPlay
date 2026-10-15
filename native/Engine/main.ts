@@ -57,7 +57,7 @@ const frameRateGuard=new FrameRateFallback(settings.fps,fps=>{
 addon.macplaySelectDisplayOptions(settings.displayID||0)
 addon.macplaySetWindowLanguage(process.env.MACPLAY_LANGUAGE||'system')
 addon.macplayConfigureWindowOptions(settings.width,settings.height,settings.screenPixelWidth,settings.screenPixelHeight,settings.resolution==='native',settings.strictPixels===true)
-setVideoCallback(()=>{frameRateGuard.videoStarted();videoDeadline.cancel();const firstVideo = !videoReady;videoReady=true;if(firstVideo&&process.env.MACPLAY_HEADLESS!=='1')process.stdout.write(JSON.stringify({showCarPlay:true})+'\n');if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('CarPlay已连接','首帧已解码，CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
+setVideoCallback(()=>{frameRateGuard.videoStarted();videoDeadline.cancel();disarmStartupDeadline();const firstVideo = !videoReady;videoReady=true;if(firstVideo&&process.env.MACPLAY_HEADLESS!=='1')process.stdout.write(JSON.stringify({showCarPlay:true})+'\n');if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('CarPlay已连接','首帧已解码，CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
 const authDir=path.join(dataDir,'authentication')
 if (!fs.existsSync(path.join(authDir,'identity.pk8')) || !fs.existsSync(path.join(authDir,'certificate.p7b'))) {
  log('缺少认证文件','请在关于页面打开认证目录，放入有使用权限的配套文件。');process.exit(2)
@@ -70,7 +70,7 @@ for(const stream of [helper.stdout,helper.stderr]) readline.createInterface({inp
  if(!videoReady && /failed|unavailable|error|refused|needs the shared/i.test(line) && !line.includes('iAP2 already runs over USB carkit')) log('连接需要检查',line)
  if(!videoReady && line.includes('MFi auth succeeded')) log('配件认证已通过','正在协商CarPlay连接')
  if(!videoReady && line.includes('CarPlayStartSession sent')) {handoffStarted=true;discovery?.announce();diagnostic('network-handoff-started');frameRateGuard.negotiationStarted();armDeadline();log('已发送连接参数','等待iPhone连接接收端')}
- if(line.includes('usbmuxd carkit up')) {wiredReady=true;usb('USB通信已建立，正在识别配件')}
+ if(line.includes('usbmuxd carkit up')) {wiredReady=true;armStartupDeadline();usb('USB通信已建立，正在识别配件')}
  if(line.includes('wired: identification accepted')) usb('iPhone已接受配件识别')
  if(line.includes('wired: MFi auth succeeded')) usb('配件认证已通过，正在建立CarPlay会话')
  if(line.includes('wired: CarPlayStartSession sent')) usb('已发送CarPlay连接参数')
@@ -89,7 +89,7 @@ const settingsFile = process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'set
 // falls back to its own speaker).
 let displayRestartPending=false
 const server=net.createServer(socket=>{
- networkConnected=true;discovery?.networkConnected();
+ networkConnected=true;armStartupDeadline();discovery?.networkConnected();
  socket.once('close',()=>{if(!active&&!stopping){networkConnected=false;discovery?.announce()}})
  const usbSession=wiredReady && !socket.remoteAddress?.endsWith('%'+settings.wifiInterface)
  diagnostic('control-connected',{family:socket.remoteFamily});if(!videoReady)log('收到连接请求','正在协商认证与音视频')
@@ -140,7 +140,11 @@ const server=net.createServer(socket=>{
 server.on('error',e=>{log('接收服务启动失败',e.message);shutdown()})
 server.listen({port:17000,host:'::',ipv6Only:false},()=>{
  if(settings.wireless)discovery=new Discovery(settings.wifiInterface||'en0',{deviceId:config.deviceId,pk:identity.pkHex,pi:identity.pairingId,btMac:config.btMac},settings.targetBluetooth||'',()=>handoffStarted&&!networkConnected&&!stopping,s=>diagnostic('network-discovery',s))
- log('等待iPhone连接',settings.wireless?'无线CarPlay接收已启用，请在系统蓝牙中配对iPhone':'有线CarPlay接收已启用，请连接USB数据线')
+ // Fork: with no phone attached yet the running engine IS the web service —
+ // frame the idle state that way instead of a pending CarPlay failure, so
+ // starting the receiver without a cable is a usable state (browser streaming
+ // works immediately). CarPlay begins automatically on phone contact.
+ log('Web 服务已就绪',settings.wireless?'iPhone通过蓝牙配对并接入共用Wi-Fi后自动开始CarPlay。':'iPhone插入USB数据线后自动开始CarPlay。')
 })
 // Fork: browser re-stream for the car head-unit browser over LAN.
 // Serves the touch-enabled client on 0.0.0.0:<httpPort> (MJPEG fallback) and
@@ -295,7 +299,18 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(line.startsWith('media ')){const index=Number(line.slice(6));if(Number.isInteger(index)&&index>=1&&index<=5)active?.sendMedia(index)}
  if(line==='stop')shutdown()
 })
-const startupDeadline=setTimeout(()=>{if(!stopping&&!videoReady){disconnectReason='连接启动超时';diagnostic('handoff-summary',discovery?.summary());log(disconnectReason);process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}},90000)
+// Fork: the 90s startup budget measures first phone contact → video, not engine
+// start → video. Wired mode legitimately waits (indefinitely) for the USB cable;
+// arming at engine start turned "please connect the USB cable" into a misleading
+// 连接启动超时 after 90s (e.g. Mac on the iPhone hotspot while no cable is plugged).
+let startupDeadline:ReturnType<typeof setTimeout>|undefined
+let startupArmed=false
+function armStartupDeadline(){
+ if(startupArmed||videoReady||stopping)return
+ startupArmed=true
+ startupDeadline=setTimeout(()=>{if(!stopping&&!videoReady){disconnectReason='连接启动超时';diagnostic('handoff-summary',discovery?.summary());log(disconnectReason);process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}},90000)
+}
+function disarmStartupDeadline(){if(startupDeadline){clearTimeout(startupDeadline);startupDeadline=undefined}startupArmed=false}
 let stopping=false
 function shutdown(){if(stopping)return;stopping=true;syncSleepAssertion();discovery?.destroy();clearTimeout(startupDeadline);videoDeadline.cancel();frameRateGuard.cancel();clearInterval(pump);clearInterval(mediaStats);for(const s of sessions)s.stop();addon.macplayCloseVideoWindow();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);process.stdin.on('end',shutdown)

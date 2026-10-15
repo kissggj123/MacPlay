@@ -303,6 +303,11 @@ export function startWebServer(opts: WebServerOpts): http.Server {
   // Fork: TCP relay from the Rust audio tap (webaudio.rs). Length-prefixed
   // wheelplay PCM frames -> WebSocket binary -> car browser (Web Audio API).
   // Replaces the earlier Ogg/Opus HTTP proxy: lower latency, no encoder.
+  // Fork: the audio tap only listens once a CarPlay session opens. Before that,
+  // every 2s retry logged connect ECONNREFUSED and flooded the live log — keep
+  // the fast retry (audio picks up within 2s of the tap opening) but show the
+  // error at most once per 30s until it connects.
+  let audioRelayErrorAt = 0
   function startAudioRelay(): void {
     const sock = net.connect(opts.audioPort, '127.0.0.1')
     let buf = Buffer.alloc(0)
@@ -310,7 +315,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     // ever connects and how many bytes/s flow from the Rust tap.
     let audioBytes = 0, audioLogAt = Date.now()
     const reconnect = () => { setTimeout(startAudioRelay, 2000).unref?.() };
-    sock.on('connect', () => { buf = Buffer.alloc(0); console.log('[webserver] audio relay connected :' + opts.audioPort) })
+    sock.on('connect', () => { audioRelayErrorAt = 0; buf = Buffer.alloc(0); console.log('[webserver] audio relay connected :' + opts.audioPort) })
     sock.on('data', (chunk: Buffer) => {
       audioBytes += chunk.length
       const now = Date.now()
@@ -326,7 +331,10 @@ export function startWebServer(opts: WebServerOpts): http.Server {
         buf = buf.subarray(4 + len)
       }
     })
-    sock.on('error', (e) => { console.log('[webserver] audio relay error:', (e as Error).message) })
+    sock.on('error', (e) => {
+      const now = Date.now()
+      if (now - audioRelayErrorAt >= 30000) { audioRelayErrorAt = now; console.log('[webserver] audio relay error:', (e as Error).message, '(audio tap not up yet — retrying)') }
+    })
     sock.on('close', reconnect)
   }
   startAudioRelay()
