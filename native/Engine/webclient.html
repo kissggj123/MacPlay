@@ -22,6 +22,8 @@
     touch-action:none;cursor:pointer;display:none}
   #c{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;
     touch-action:none;cursor:pointer;display:none}
+  #rv{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;
+    touch-action:none;cursor:pointer;display:none}
   /* generic color transition (night mode follows system, 200ms) */
   body,#waiting,#hud,.rowselect,.micbtn,.ghostbtn,.lbl,.val,.tab,.seg button{
     transition:background-color .2s ease,color .2s ease,border-color .2s ease}
@@ -136,6 +138,7 @@
 </div>
 <img id="v" alt="" draggable="false">
 <canvas id="c"></canvas>
+<video id="rv" autoplay playsinline muted></video>
 <div id="hud"></div>
 <div id="banner"><span class="bdot"></span><span id="btxt">连接已断开 · 重连中</span></div>
 <div id="hint">触摸屏幕操作 CarPlay · 双击呼出/隐藏控制</div>
@@ -245,6 +248,9 @@
   var spsPps=null, frameCount=0, bytesCount=0, lastStatTime=Date.now();
   var droppedFrames=0, rttMs=null, audioUnderruns=0;
   var hud=document.getElementById('hud');
+  // Fork: WebRTC direct passthrough state (H.264, LAN host candidates).
+  var rv=document.getElementById('rv');
+  var rtcws=null, rtcpc=null, rtcActive=false, rtcStatsTimer=null, rtcStatsSummary='';
 
   function updateHud(mode, extra){
     hud.style.display='block';
@@ -665,7 +671,100 @@
     setInterval(function(){ updateHud('MJPEG'); },1000);
   }
 
-  if (useWebCodecs) {
+  /* ============ WebRTC direct passthrough (H.264, LAN host candidates) ============ */
+  function rtcDegrade(reason){
+    if(!rtcpc&&!rtcws) return;
+    try{ sessionStorage.setItem('rtcBlocked','1'); }catch(e){}
+    console.log('[rtc] degrade:',reason);
+    if(rtcStatsTimer){ clearInterval(rtcStatsTimer); rtcStatsTimer=null; }
+    try{ if(rtcpc){rtcpc.close();rtcpc=null;} }catch(e){}
+    try{ if(rtcws){rtcws.close();rtcws=null;} }catch(e){}
+    rtcActive=false;
+    rv.style.display='none';
+    startWebCodecs();
+  }
+  function startWebRTC(){
+    canvas.style.display='none'; img.style.display='none'; rv.style.display='block';
+    var proto=location.protocol==='https:'?'wss':'ws';
+    var exchanged=false;
+    rtcpc=new RTCPeerConnection();
+    rtcpc.addTransceiver('video',{direction:'recvonly'});
+    rtcpc.ontrack=function(ev){
+      rv.srcObject=ev.streams[0];
+      rtcActive=true;
+      waiting.style.display='none';
+    };
+    rtcpc.onicecandidate=function(ev){
+      if(ev.candidate&&rtcws&&rtcws.readyState===1)
+        rtcws.send(JSON.stringify({t:'ice',mline:ev.candidate.sdpMLineIndex||0,candidate:ev.candidate.candidate}));
+    };
+    rtcpc.onconnectionstatechange=function(){
+      if(rtcpc&&(rtcpc.connectionState==='failed'||rtcpc.connectionState==='disconnected'))
+        rtcDegrade('ice '+rtcpc.connectionState);
+    };
+    rtcws=new WebSocket(proto+'://'+location.host+'/rtc');
+    var sdpTimer=setTimeout(function(){ if(!exchanged) rtcDegrade('sdp timeout'); },3000);
+    rtcws.onopen=function(){
+      rtcpc.createOffer().then(function(offer){ return rtcpc.setLocalDescription(offer); })
+        .then(function(){ if(rtcws&&rtcws.readyState===1) rtcws.send(JSON.stringify({t:'offer',sdp:rtcpc.localDescription.sdp})); })
+        .catch(function(e){ clearTimeout(sdpTimer); rtcDegrade('offer: '+e); });
+    };
+    rtcws.onmessage=function(ev){
+      var msg; try{ msg=JSON.parse(ev.data); }catch(e){ return; }
+      if(msg.t==='unsupported'){ clearTimeout(sdpTimer); rtcDegrade('unsupported'); return; }
+      if(msg.t==='answer'&&msg.sdp){
+        exchanged=true; clearTimeout(sdpTimer);
+        rtcpc.setRemoteDescription({type:'answer',sdp:msg.sdp}).catch(function(e){ rtcDegrade('answer: '+e); });
+      } else if(msg.t==='ice'&&msg.candidate){
+        rtcpc.addIceCandidate({candidate:msg.candidate,sdpMLineIndex:msg.mline||0}).catch(function(){ /* non-fatal */ });
+      }
+    };
+    rtcws.onerror=function(){ try{rtcws.close();}catch(e){} };
+    rtcws.onclose=function(){ if(!exchanged){ clearTimeout(sdpTimer); rtcDegrade('rtc ws closed'); } };
+    // Health watchdog: 1s getStats. framesDecoded stalled 5s -> PLI, another
+    // 5s -> degrade back to WS/WebCodecs for this session.
+    var lastDecoded=-1, stallSince=0, pliAt=0;
+    rtcStatsTimer=setInterval(function(){
+      if(!rtcpc||rtcpc.connectionState!=='connected'){ return; }
+      rtcpc.getStats().then(function(stats){
+        var decoded=null, fps=null, lost=null, rtt=null;
+        stats.forEach(function(s){
+          if(s.type==='inbound-rtp'&&s.kind==='video'){
+            if(typeof s.framesDecoded==='number') decoded=s.framesDecoded;
+            if(typeof s.framesPerSecond==='number') fps=s.framesPerSecond;
+            if(typeof s.packetsLost==='number') lost=s.packetsLost;
+          }
+          if(s.type==='candidate-pair'&&s.state==='succeeded'&&typeof s.currentRoundTripTime==='number')
+            rtt=Math.round(s.currentRoundTripTime*1000);
+        });
+        rtcStatsSummary=(fps!==null?fps.toFixed(1)+' fps':'…')+(lost!==null?'  丢包'+lost:'')+(rtt!==null?'  '+rtt+'ms':'');
+        if(decoded!==null){
+          if(decoded>lastDecoded){ lastDecoded=decoded; stallSince=0; }
+          else if(lastDecoded>=0){
+            if(!stallSince) stallSince=Date.now();
+            var stall=Date.now()-stallSince;
+            if(stall>5000&&(!pliAt||Date.now()-pliAt>5000)){
+              if(rtcws&&rtcws.readyState===1) rtcws.send(JSON.stringify({t:'pli'}));
+              pliAt=Date.now();
+            }
+            if(stall>10000) rtcDegrade('stalled '+Math.round(stall/1000)+'s');
+          }
+        }
+      }).catch(function(){});
+    },1000);
+    setInterval(function(){
+      if(!rtcActive) return;
+      hud.style.display='block';
+      hud.textContent='WebRTC H.264\n'+rtcStatsSummary;
+    },1000);
+  }
+
+  var canRtc = useWebCodecs && window.RTCPeerConnection
+    && !(function(){ try { return sessionStorage.getItem('rtcBlocked'); } catch(e) { return null; } })()
+    && typeof health !== 'undefined' && health && health.rtc === true && health.codec !== 'h265';
+  if (canRtc) {
+    startWebRTC();
+  } else if (useWebCodecs) {
     startWebCodecs();
   } else {
     if (!window.isSecureContext) {
@@ -963,6 +1062,8 @@
     return {x:Math.max(0,Math.min(1,x)), y:Math.max(0,Math.min(1,y))};
   }
   function videoSize(){
+    // Fork: WebRTC renders into the <video> element — use its intrinsic size.
+    if(rtcActive&&rv.videoWidth) return {w:rv.videoWidth,h:rv.videoHeight,el:rv};
     var el=useWebCodecs?canvas:img;
     var w=(useWebCodecs?canvas.width:img.naturalWidth)||960;
     var h=(useWebCodecs?canvas.height:img.naturalHeight)||Math.round(960*9/16);
@@ -1036,6 +1137,14 @@
   window.addEventListener('pagehide',releaseAll);
   img.addEventListener('pointerdown',function(){ hint.style.display='none'; },{once:true});
   canvas.addEventListener('pointerdown',function(){ hint.style.display='none'; },{once:true});
+  // Fork: WebRTC renders into <video id="rv"> — mirror every pointer mapping.
+  rv.addEventListener('pointerdown',onPointerDown);
+  rv.addEventListener('pointermove',onPointerMove);
+  ['pointerup','pointercancel','lostpointercapture'].forEach(function(ev){
+    rv.addEventListener(ev,release);
+  });
+  rv.addEventListener('contextmenu',function(e){e.preventDefault();});
+  rv.addEventListener('pointerdown',function(){ hint.style.display='none'; },{once:true});
 
   /* ============ keyboard ============ */
   function sendKnob(state){ send(Object.assign({t:'knob'},state)); }
