@@ -785,9 +785,14 @@
   // (bursts overrun it) or wastes latency. Per-stream target grows when
   // playback underruns and creeps back down while playback stays healthy.
   var jitterTargets={};
-  function jitterFor(stream){
+  function jitterFor(stream,kind){
     var j=jitterTargets[stream];
-    if(!j) j=jitterTargets[stream]={target:0.35,healthySince:0};
+    if(!j){
+      // Spec: per-kind floor — call is latency-sensitive, media prioritizes
+      // smoothness; underruns deepen from the same base and decay back.
+      var base=kind==='media'?0.35:(kind==='nav'?0.15:0.06);
+      j=jitterTargets[stream]={target:base,floor:base,healthySince:0};
+    }
     return j;
   }
   function playAudioPacket(buffer){
@@ -797,14 +802,16 @@
     if(!audioRunning){ ensureAudio(); showTapHint(); return; }
     var frame=decodeAudioPacket(buffer); if(!frame) return;
     var now=audioCtx.currentTime;
-    var j=frame.media?jitterFor(frame.stream):null;
-    var delay=j?j.target:0.06, maxAhead=frame.media?delay+1.65:0.25;
+    var kind=streamKind(frame.stream);
+    var j=jitterFor(frame.stream,kind);
+    var delay=j.target, maxAhead=kind==='media'?delay+1.65:0.25;
     var next=audioStreams.get(frame.stream);
     if(next===undefined) next=now+delay;
     if(next<now){
       // Underrun — deepen this stream's buffer instead of always losing
       // audio at the same point; also don't hard-stop playing nodes (click).
-      if(j){ j.target=Math.min(1,j.target+0.1); j.healthySince=now; }
+      audioUnderruns++;
+      j.target=Math.min(1,j.target+0.1); j.healthySince=now;
       // Fork (weak-network): WheelPlay skip-to-live. After a stall the old
       // schedule is stale; when badly behind, drop this stream's queued
       // nodes that have not started yet (silent — nothing clicks) so latency
@@ -831,8 +838,8 @@
     node.onended=function(){ audioNodes.delete(node); node.disconnect(); };
     node.start(next);
     audioStreams.set(frame.stream,next+count/frame.rate);
-    // 20s without an underrun → reclaim 20ms of latency, floor 0.3s.
-    if(j&&now-j.healthySince>20&&j.target>0.3){ j.target=Math.max(0.3,j.target-0.02); j.healthySince=now; }
+    // 20s without an underrun → reclaim 20ms of latency, back to per-kind floor.
+    if(now-j.healthySince>20&&j.target>j.floor){ j.target=Math.max(j.floor,j.target-0.02); j.healthySince=now; }
   }
   mutebtn.addEventListener('click',function(e){
     e.stopPropagation(); muted=!muted; mutebtn.classList.toggle('muted',muted);
