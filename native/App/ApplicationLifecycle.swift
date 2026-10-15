@@ -8,6 +8,13 @@ import Combine
     private var openMainWindow: (() -> Void)?
     private var statusItem: NSStatusItem?
     private weak var statusLineItem: NSMenuItem?
+    // Last menu content cache — objectWillChange fires for every @Published
+    // change (`logs` alone ticks many times/second while streaming); the menu
+    // only depends on these three.
+    private var lastMenuRunning=false
+    private var lastMenuReceiving=false
+    private var lastMenuAddressCount=0
+    private var lastMenuAddressKey=""
     private var modelObservation: AnyCancellable?
     private var windowObservation: NSObjectProtocol?
     private var terminating = false
@@ -30,7 +37,7 @@ import Combine
         if self.model == nil {
             self.model=model
             modelObservation=model.objectWillChange.sink { [weak self] _ in
-                DispatchQueue.main.async {self?.updateMenus()}
+                DispatchQueue.main.async {self?.updateMenusIfNeeded()}
             }
         }
         if let window=NSApp.windows.first(where:{!($0 is NSPanel) && $0.canBecomeMain}) {
@@ -129,7 +136,23 @@ import Combine
     func menuWillOpen(_ menu:NSMenu) {statusLineItem?.title=statusTitle()}
     func menuDidClose(_ menu:NSMenu) {model?.persistPreferences()}
 
-    private func updateMenus() {statusItem?.menu=menu()}
+    private func updateMenusIfNeeded() {
+        guard let model else {return}
+        guard model.running != lastMenuRunning
+            || model.receivingOrWaiting != lastMenuReceiving
+            || model.lanAddresses.count != lastMenuAddressCount
+            || model.lanAddresses.first{$0.iphoneUSB == false}?.address != lastMenuAddressKey else {return}
+        updateMenus()
+    }
+    private func updateMenus() {
+        if let model {
+            lastMenuRunning=model.running
+            lastMenuReceiving=model.receivingOrWaiting
+            lastMenuAddressCount=model.lanAddresses.count
+            lastMenuAddressKey=model.lanAddresses.first{$0.iphoneUSB == false}?.address ?? ""
+        }
+        statusItem?.menu=menu()
+    }
     func applicationDockMenu(_ sender:NSApplication) -> NSMenu? {menu()}
     @objc private func showMain() {
         explicitWindowRequestUntil=Date().addingTimeInterval(1)
