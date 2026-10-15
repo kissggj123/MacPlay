@@ -110,9 +110,21 @@ ADDON="$RES/engine/node_modules/livi-gst-video/build/Release/gst_video.node"
 while IFS= read -r rp; do install_name_tool -delete_rpath "$rp" "$ADDON" 2>/dev/null || true; done < <(otool -l "$ADDON" | awk '/LC_RPATH/{getline;getline;print $2}')
 install_name_tool -add_rpath '@loader_path/../../../../../gstreamer/macos-x64/lib' "$ADDON"
 install_name_tool -add_rpath '@loader_path/../../../../../gstreamer/macos-arm64/lib' "$ADDON"
-for bin in "$RECEIVER/Contents/MacOS/MacPlayReceiver" "$RES/driver/"* "$RES/engine/node_modules/"*/build/Release/*.node; do codesign --force --sign - "$bin"; done
-codesign --force --sign - "$RECEIVER"
-codesign --force --deep --sign - "$APP"
+# Fork: sign with the stable local identity "NIO Play Local" when available
+# (created once by scripts/create-signing-cert.sh). The macOS Application
+# Firewall and keychain ACLs key authorizations on the code signature — an
+# ad-hoc signature ("-") changes on EVERY rebuild, so firewall allow rules and
+# keychain "Always Allow" grants are silently invalidated after each update and
+# the admin password gets asked again and again. A stable identity makes those
+# grants persist across rebuilds. Falls back to ad-hoc when absent.
+SIGN_ID="NIO Play Local"
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$SIGN_ID\""; then
+  SIGN_ID="-"
+fi
+echo "Signing with identity: $SIGN_ID"
+for bin in "$RECEIVER/Contents/MacOS/MacPlayReceiver" "$RES/driver/"* "$RES/engine/node_modules/"*/build/Release/*.node; do codesign --force --sign "$SIGN_ID" "$bin"; done
+codesign --force --sign "$SIGN_ID" "$RECEIVER"
+codesign --force --deep --sign "$SIGN_ID" "$APP"
 if [[ "${1:-}" != "--app-only" ]]; then
  mkdir -p build/dmg
  ln -sfn /Applications build/dmg/Applications

@@ -32,8 +32,13 @@ struct PhoneChoice: Codable, Identifiable {
 }
 
 // Fork: LAN addresses for the car browser + firewall helpers.
-func lanIPv4Addresses() -> [(name: String, address: String)] {
-    var result: [(String, String)] = []
+// Returns (label, address, network, iphoneUSB). Junk interfaces are filtered
+// (VPN tunnels, AirDrop); each entry carries its subnet key so the UI can warn
+// when two interfaces share a network — iPhone's USB tether interface and its
+// Wi-Fi hotspot BOTH use 172.20.10.0/28, and the USB address is unreachable
+// from hotspot clients, which is why car browsers "can't open the page" there.
+func lanIPv4Addresses() -> [(name: String, address: String, network: String, iphoneUSB: Bool)] {
+    var result: [(String, String, String, Bool)] = []
     var ifaddr: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return [] }
     defer { freeifaddrs(ifaddr) }
@@ -42,12 +47,28 @@ func lanIPv4Addresses() -> [(name: String, address: String)] {
         defer { ptr = p.pointee.ifa_next }
         guard let sa = p.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
         let name = String(cString: p.pointee.ifa_name)
-        if name == "lo0" { continue }
+        if name == "lo0" || name.hasPrefix("utun") || name == "awdl0" || name == "llw0" { continue }
         var sin = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
         var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
         guard inet_ntop(AF_INET, &sin.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil else { continue }
         let ip = String(cString: buf)
-        if !result.contains(where: { $0.1 == ip }) { result.append((name, ip)) }
+        var network = ip
+        if let maskPtr = p.pointee.ifa_netmask {
+            var m = maskPtr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+            var mbuf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            if inet_ntop(AF_INET, &m.sin_addr, &mbuf, socklen_t(INET_ADDRSTRLEN)) != nil {
+                let ipParts = ip.split(separator: ".").compactMap { UInt32($0) }
+                let mParts = String(cString: mbuf).split(separator: ".").compactMap { UInt32($0) }
+                if ipParts.count == 4 && mParts.count == 4 {
+                    let addr=(ipParts[0]<<24)|(ipParts[1]<<16)|(ipParts[2]<<8)|ipParts[3]
+                    let mk=(mParts[0]<<24)|(mParts[1]<<16)|(mParts[2]<<8)|mParts[3]
+                    let net=addr&mk
+                    network="\((net>>24)&255).\((net>>16)&255).\((net>>8)&255).\((net)&255)"
+                }
+            }
+        }
+        let iphoneUSB = ip.hasPrefix("172.20.10.") && name != "en0"
+        if !result.contains(where: { $0.1 == ip }) { result.append((name, ip, network, iphoneUSB)) }
     }
     // Wi-Fi (en0) first — that's the car-hotspot interface in practice.
     result.sort {
@@ -175,7 +196,10 @@ struct PlaySettings: Codable {
     @Published var usbStage = "接收服务未启动"
     @Published var usbError = ""
     // Fork: car-browser LAN info + firewall.
-    @Published var lanAddresses: [(name: String, address: String)] = []
+    @Published var lanAddresses: [(name: String, address: String, network: String, iphoneUSB: Bool)] = []
+    // Fork: two interfaces on the same subnet — iPhone USB tether + its Wi-Fi
+    // hotspot both use 172.20.10.x, and hotspot clients can't reach the USB one.
+    @Published var lanSubnetConflict = false
     @Published var firewallState = ""
     @Published var firewallNeedsAllow = false
     @Published var firewallWorking = false
@@ -271,8 +295,13 @@ struct PlaySettings: Codable {
         if let uid=settings.outputDevice,!uid.isEmpty,!audioOutputs.contains(where:{$0.id==uid}){settings.outputDevice=nil}
     }
     // Fork: car-browser LAN info + firewall for the webserver port.
-    func refreshLanInfo() {
+    func refreshLanInfo(refreshFirewall: Bool = true) {
         lanAddresses = lanIPv4Addresses()
+        // Two live interfaces on one network = hotspot/USB-tether conflict.
+        var seen = Set<String>(); lanSubnetConflict = false
+        for item in lanAddresses where seen.contains(item.network) { lanSubnetConflict = true }
+        for item in lanAddresses { seen.insert(item.network) }
+        guard refreshFirewall else { return }
         guard let bin = receiverBinaryPath() else {
             firewallState = L("找不到接收器程序")
             firewallNeedsAllow = false
@@ -494,6 +523,12 @@ struct PlaySettings: Codable {
                 if let savedPassword = settings.wifiProfiles[ssid], !savedPassword.isEmpty {
                     settings.password = savedPassword
                     passwordStatus = "已自动填入已保存的网络密码。"
+                } else if let keychainPassword = readAppOwnedWifiPassword(ssid) {
+                    // App-owned keychain item: no system dialog, no admin password.
+                    settings.password = keychainPassword
+                    settings.wifiProfiles[ssid] = keychainPassword
+                    persistPreferences()
+                    passwordStatus = "已从应用钥匙串自动填入网络密码。"
                 } else {
                     settings.password = ""
                     passwordStatus = "网络已切换，正在自动读取密码…"
@@ -529,6 +564,40 @@ struct PlaySettings: Codable {
         guard let interface=CWWiFiClient.shared().interface(withName:settings.wifiInterface),interface.ssid()==settings.ssid else {return false}
         return [7,8,9,10,12].contains(Int(interface.security().rawValue))
     }
+    // Fork: app-owned keychain copy of WiFi passwords (generic password items
+    // created by the app itself — no ACL challenge as long as the code
+    // signature is stable; see scripts/create-signing-cert.sh). settings.json
+    // wifiProfiles remains the first line of defence; this covers a wiped or
+    // lost settings file without touching the system AirPort item again.
+    func writeAppOwnedWifiPassword(ssid: String, password: String) {
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "NIO Play WiFi",
+            kSecAttrAccount as String: ssid,
+        ]
+        let payload: [String: Any] = [
+            kSecValueData as String: Data(password.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let status = SecItemUpdate(base as CFDictionary, payload as CFDictionary)
+        if status == errSecItemNotFound {
+            SecItemAdd(base.merging(payload) { _, new in new } as CFDictionary, nil)
+        }
+    }
+    func readAppOwnedWifiPassword(_ ssid: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "NIO Play WiFi",
+            kSecAttrAccount as String: ssid,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let password = String(data: data, encoding: .utf8), !password.isEmpty else { return nil }
+        return password
+    }
     func readSavedNetworkPassword() {
         guard !readingPassword else { return }
         if currentNetworkIsEnterprise {
@@ -561,6 +630,10 @@ struct PlaySettings: Codable {
                 // again (app updates re-sign the binary and invalidate the
                 // keychain ACL — the local cache survives all of that).
                 settings.wifiProfiles[ssid]=password
+                // Fork: also keep an app-owned keychain copy (stable signature
+                // ⇒ no ACL prompt) so a wiped settings file still resolves
+                // without the system AirPort authorization.
+                writeAppOwnedWifiPassword(ssid: ssid, password: password)
                 persistPreferences()
                 passwordStatus="已读取并记住密码，之后无需再授权。"
             } else if result.0==errSecSuccess {
@@ -989,7 +1062,9 @@ struct SettingsView: View {
                                         HStack {
                                             VStack(alignment: .leading, spacing: 2) {
                                                 Text("http://\(item.address):8080").textSelection(.enabled).font(.system(.callout, design: .monospaced))
-                                                Text(item.name).font(.caption2).foregroundStyle(.secondary)
+                                                // Fork: friendly interface label; flag the
+                                                // iPhone USB tether address explicitly.
+                                                Text(item.iphoneUSB ? L("iPhone USB 网络（与热点同网段，车机无法访问，勿用）") : (item.name == "en0" ? L("Wi-Fi") : item.name)).font(.caption2).foregroundStyle(item.iphoneUSB ? Color.orange : Color.secondary)
                                             }
                                             Spacer()
                                             Button(L("复制 HTTP")) {
@@ -1000,6 +1075,12 @@ struct SettingsView: View {
                                     }
                                     .padding(.vertical, 4)
                                 }
+                            }
+                            // Fork: iPhone USB tether + Wi-Fi hotspot share
+                            // 172.20.10.0/28 — the classic "car can't open the
+                            // page on the hotspot" trap.
+                            if model.lanSubnetConflict {
+                                Text(L("⚠️ 检测到多个网卡在同一网段（iPhone 的 USB 共享网络与 Wi-Fi 热点都是 172.20.10.x）。请使用上面「Wi-Fi」的地址；若仍无法访问，拔掉数据线或关闭 iPhone 的「USB 网络共享」后重试。")).font(.callout).foregroundStyle(.orange)
                             }
                             HStack {
                                 Text(L("防火墙"))
@@ -1020,6 +1101,11 @@ struct SettingsView: View {
                             }
                             Text(L("局域网需放行：TCP 8080（浏览器画面/触控/音频）。iPhone 直连 CarPlay 使用系统 usbmuxd/蓝牙/Wi-Fi，走 NIO Play 自身通道。")).font(.callout).foregroundStyle(.secondary)
                         }.onAppear { model.refreshLanInfo() }
+                        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
+                            // Addresses move when the hotspot (re)assigns DHCP;
+                            // skip the firewall scan, that stays manual/first-load.
+                            model.refreshLanInfo(refreshFirewall: false)
+                        }
                         if !model.settings.wireless {Section(L("USB直连")) {
                             LabeledContent(L("设备"),value:L(model.usbStatus))
                             if !model.usbDevices.isEmpty {LabeledContent(L("连接阶段"),value:L(model.usbError.isEmpty ? model.usbStage : model.usbError))}

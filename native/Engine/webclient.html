@@ -265,21 +265,41 @@
     }
   }
 
-  // Fork: PlayPort-style keyframe watchdog.
-  // If no frames decoded within the backoff window, request a keyframe from the
-  // iPhone. The interval backs off (2.5s → 10s cap) so a phone that legitimately
-  // stopped sending frames (paused music, static map) cannot be flooded with
-  // forceKeyFrame commands — that storm stalled entire sessions.
+  // Fork: PlayPort-style keyframe watchdog with WheelPlay dual-signal health.
+  // The server pushes {t:'video',frames:N} every 2s counting NALs it actually
+  // forwarded. A keyframe is requested ONLY when the source is still advancing
+  // but nothing decodes — on a static CarPlay screen (or a genuinely stalled
+  // uplink) the watchdog stays silent, so a throttled link is never pummeled by
+  // forceKeyFrame I-frames (each one is a congestion collapse). After 3
+  // consecutive silent requests the decoder is rebuilt (self-heal without page
+  // reload); the backoff caps at 10s.
   var keyframeWatchdog=null, framesDecodedSinceConfig=0, keyframeBackoffMs=2500, lastConfiguredKey=null;
+  var serverVideoFrames=-1, serverFramesAtArm=-2, stalledRequests=0;
   function armKeyframeWatchdog(){
     clearKeyframeWatchdog();
     framesDecodedSinceConfig=0;
+    serverFramesAtArm=serverVideoFrames;
     keyframeWatchdog=setTimeout(function(){
-      if(framesDecodedSinceConfig===0 && decoderConfigured){
+      var sourceAdvancing = serverVideoFrames<0 || serverVideoFrames!==serverFramesAtArm;
+      if(framesDecodedSinceConfig===0 && decoderConfigured && sourceAdvancing){
         // Request keyframe via WebSocket
         if(wsReady) send({t:'keyframe'});
         keyframeBackoffMs=Math.min(keyframeBackoffMs*2,10000);
-        armKeyframeWatchdog(); // Re-arm with the longer interval
+        stalledRequests++;
+        if(stalledRequests>=3){
+          // Decoder is probably wedged (fatal decode errors can be silent):
+          // rebuild it; the next config NALs reconfigure automatically.
+          stalledRequests=0; keyframeBackoffMs=2500;
+          decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+          try{ videoDecoder.close(); }catch(e){}
+          setTimeout(makeDecoder,300);
+        }else{
+          armKeyframeWatchdog(); // Re-arm with the longer interval
+        }
+      }else if(framesDecodedSinceConfig>0){
+        stalledRequests=0;
+      }else{
+        armKeyframeWatchdog(); // source static or not configured: keep waiting quietly
       }
     }, keyframeBackoffMs);
   }
@@ -287,7 +307,7 @@
     if(keyframeWatchdog){ clearTimeout(keyframeWatchdog); keyframeWatchdog=null; }
   }
   // Call this when a frame is successfully decoded
-  function onFrameDecoded(){ framesDecodedSinceConfig++; keyframeBackoffMs=2500; }
+  function onFrameDecoded(){ framesDecodedSinceConfig++; keyframeBackoffMs=2500; stalledRequests=0; }
 
   function buildHvcC(vps, sps, pps){
     // hvcC record assembled from the stream's parameter sets. The general
@@ -434,6 +454,7 @@
       if(typeof ev.data==='string'){
         try{
           var msg=JSON.parse(ev.data);
+          if(msg.t==='video'&&typeof msg.frames==='number'){ serverVideoFrames=msg.frames; return; }
           if(msg.codec&&msg.codec!==videoCodec){
             videoCodec=msg.codec;
             // a different stream needs a fresh decoder
@@ -604,7 +625,18 @@
       // Underrun — deepen this stream's buffer instead of always losing
       // audio at the same point; also don't hard-stop playing nodes (click).
       if(j){ j.target=Math.min(1,j.target+0.1); j.healthySince=now; }
-      next=now+0.02;
+      // Fork (weak-network): WheelPlay skip-to-live. After a stall the old
+      // schedule is stale; when badly behind, drop this stream's queued
+      // nodes that have not started yet (silent — nothing clicks) so latency
+      // resets instead of accumulating. Already-playing nodes end naturally.
+      if(now-next>0.25){
+        audioNodes.forEach(function(n){
+          if(n._stream===frame.stream&&n._at>now){ try{ n.stop(0); }catch(e){} }
+        });
+        next=now+0.05;
+      }else{
+        next=now+0.02;
+      }
     }
     if(next-now>maxAhead||audioNodes.size>=256) return;
     var count=frame.pcm.length/frame.channels;
@@ -614,7 +646,7 @@
       for(var i=0;i<count;i++) out[i]=frame.pcm[i*frame.channels+ch]/32768;
     }
     var node=audioCtx.createBufferSource();
-    node.buffer=ab; node._stream=frame.stream;
+    node.buffer=ab; node._stream=frame.stream; node._at=next;
     node.connect(gainFor(frame.stream)); audioNodes.add(node);
     node.onended=function(){ audioNodes.delete(node); node.disconnect(); };
     node.start(next);
@@ -700,8 +732,19 @@
     var h=(useWebCodecs?canvas.height:img.naturalHeight)||Math.round(960*9/16);
     return {w:w,h:h,el:el};
   }
+  // Fork (weak-network): WheelPlay-style outbound backpressure. Touch pushes
+  // carry the FULL active state (idempotent), so move-only updates are safely
+  // droppable when the link is congested — the next push re-sends the latest
+  // positions. Releases (down:false) must always go or the phone thinks a
+  // finger is still down. If bufferedAmount keeps growing past 64KB the link
+  // is effectively dead: fail fast and let the 2s reconnect take over.
+  var TOUCH_SOFT_LIMIT=8192, TOUCH_HARD_LIMIT=65536;
   function push(){
+    if(!wsReady||!ws) return;
+    if(ws.bufferedAmount>TOUCH_HARD_LIMIT){ try{ws.close();}catch(e){} return; }
     var touches=[]; active.forEach(function(c){ touches.push(c); });
+    var movesOnly=touches.length&&touches.every(function(c){return c.down;});
+    if(movesOnly&&ws.bufferedAmount>TOUCH_SOFT_LIMIT) return;
     send({t:'touch',touches:touches});
   }
   function slot(pid){ return (pid%2+2)%2; }

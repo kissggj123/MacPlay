@@ -392,6 +392,24 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     }
   }
 
+  // Fork (weak-network): WheelPlay-style dual-signal health. The server counts
+  // NALs actually handed to clients and pushes {t:'video',frames:N} to the
+  // /h264 socket every 2s. The browser's keyframe watchdog only fires when the
+  // SOURCE is still advancing but nothing decodes — on a static CarPlay screen
+  // (or a genuinely stalled uplink) it stays quiet, so throttled links are not
+  // pummeled by force-keyframe I-frames (each one is a congestion collapse).
+  let videoNalsSent = 0
+  setInterval(() => {
+    if (!h264Clients.size) return
+    const msg = JSON.stringify({ t: 'video', frames: videoNalsSent })
+    const payload = Buffer.from(msg, 'utf8')
+    const header = Buffer.from([0x81, payload.length])
+    for (const sock of h264Clients) {
+      if ((sock as any).destroyed) { h264Clients.delete(sock); continue }
+      try { sock.write(Buffer.concat([header, payload])) } catch { /* ignore */ }
+    }
+  }, 2000).unref?.()
+
   /** Fork: infer the codec from a config NAL header. H.264 SPS/PPS start with
    * type 7/8; HEVC VPS/SPS/PPS have a 2-byte header with type 32..34. HEVC
    * types are checked first: an HEVC IDR byte (0x28) collides with H.264 PPS
@@ -475,6 +493,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       if (type === 7) cachedSps = nal
       else if (type === 8) cachedPps = nal
     }
+    videoNalsSent++
     sendNalToClients(nal)
   }
   function sendCachedConfig(sock: net.Socket): void {
@@ -591,6 +610,10 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     if (typeof key !== 'string') { socket.destroy(); return }
     // The upgrade socket is a connected TCP socket at runtime.
     const sock = socket as unknown as net.Socket
+    // Fork (weak-network): Nagle batching adds up to 40ms per small write;
+    // touch and audio frames are latency-critical. Also applies to the video
+    // relay's config/status text frames.
+    sock.setNoDelay(true)
     sock.write(
       'HTTP/1.1 101 Switching Protocols\r\n' +
       'Upgrade: websocket\r\n' +
