@@ -173,6 +173,8 @@ const webServer=startWebServer({
   h264Port:Number(process.env.MACPLAY_H264_PORT||'18083'),
   micPort:Number(process.env.MACPLAY_MIC_PORT||'18084'),
   certDir:path.join(dataDir,'certs'),
+  // Fork: gst_video addon for the /rtc WebRTC signaling channel.
+  rtcAddon:()=>addon,
   getStack:()=>active,
   isVideoReady:()=>videoReady,
   // Fork: the browser device IS the audio output — the Mac never plays

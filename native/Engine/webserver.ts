@@ -56,6 +56,10 @@ export interface WebServerOpts {
   // follow the display: while true the Mac local output is muted and the
   // browser mic takes over the CarPlay input when the browser opens one.
   onBrowserClients?: (connected: boolean) => void
+  // Fork: the gst_video addon for the /rtc WebRTC signaling channel (raw NAPI
+  // surface). Omitted on hosts without webrtc support — /rtc then answers
+  // {t:"unsupported"} and browsers take the WS/WebCodecs path.
+  rtcAddon?: () => any
   // Fork: /mjpeg proxies the Rust GStreamer websink (internal stream).
   // The pipeline taps decoded frames directly via MACPLAY_WEB_PORT.
 }
@@ -502,6 +506,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       else if (type === 8) cachedPps = nal
     }
     videoNalsSent++
+    rtcPushNal(nal)
     sendNalToClients(nal)
   }
   function sendCachedConfig(sock: net.Socket): void {
@@ -534,6 +539,38 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     sock.on('close', reconnect)
   }
   startH264Relay()
+  // Fork: WebRTC direct passthrough (/rtc). Browser-offer-first signaling:
+  // in  {t:"offer",sdp} | {t:"ice",mline,candidate} | {t:"pli"}
+  // out {t:"answer",sdp} | {t:"ice",mline,candidate} | {t:"connected"} | {t:"state",state}
+  // Single client like the h264 tap: a second join is rejected. NALs are fed
+  // from broadcastH264 only while the peer connection is established.
+  const rtc = opts.rtcAddon?.()
+  const rtcOk = !!rtc && typeof rtc.rtcSupported === 'function' && rtc.rtcSupported() === true
+  let rtcSock: net.Socket | null = null
+  let rtcNalsActive = false
+  function rtcEvent(json: string): void {
+    try {
+      const msg = JSON.parse(json)
+      if (msg.t === 'connected') {
+        rtcNalsActive = true
+        // Seed the payloader parser with the cached config so the first IDR
+        // is decodable before the next in-band config arrives.
+        if (videoCodec === 'h264') {
+          try {
+            if (cachedSps) rtc.rtcPushNal(cachedSps)
+            if (cachedPps) rtc.rtcPushNal(cachedPps)
+          } catch { /* ignore */ }
+        }
+      } else if (msg.t === 'state') {
+        rtcNalsActive = false
+      }
+    } catch { /* ignore */ }
+    if (rtcSock) wsSendText(rtcSock, json)
+  }
+  function rtcPushNal(nal: Buffer): void {
+    if (!rtcNalsActive || videoCodec !== 'h264' || !rtc) return
+    try { rtc.rtcPushNal(nal) } catch { /* ignore */ }
+  }
   // Fork: browser microphone uplink (PlayPort-style). The browser captures
   // mic via getUserMedia and sends wheelplay-format PCM frames (stream=-1)
   // as binary on /touch. We forward them via TCP to the Rust mic input
@@ -581,6 +618,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
         mode: process.env.MACPLAY_NO_DECODE === '1' ? 'zero-transcode' : 'passthrough',
         codec: videoCodec,
         httpsPort: opts.httpsPort,
+        rtc: rtcOk,
       }))
       return
     }
@@ -613,7 +651,7 @@ export function startWebServer(opts: WebServerOpts): http.Server {
 
   server.on('upgrade', (req, socket) => {
     const url = req.url || ''
-    if (url !== '/touch' && url !== '/h264') { socket.destroy(); return }
+    if (url !== '/touch' && url !== '/h264' && url !== '/rtc') { socket.destroy(); return }
     const key = req.headers['sec-websocket-key']
     if (typeof key !== 'string') { socket.destroy(); return }
     // The upgrade socket is a connected TCP socket at runtime.
@@ -641,6 +679,37 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       sock.on('close', remove)
       // Drain any incoming data (client shouldn't send, but don't break).
       sock.on('data', () => {})
+      return
+    }
+    if (url === '/rtc') {
+      if (!rtcOk) {
+        // Complete the handshake, answer unsupported, then close: the page
+        // treats this as "feature absent" and goes straight to WS/WebCodecs.
+        try { wsSendText(sock, JSON.stringify({ t: 'unsupported' })) } catch { /* ignore */ }
+        setTimeout(() => { try { sock.destroy() } catch { /* ignore */ } }, 300).unref?.()
+        return
+      }
+      // Single client like the h264 tap: a second join is rejected.
+      if (rtcSock) { try { sock.destroy() } catch { /* ignore */ } return }
+      rtcSock = sock
+      wsTrackDrain(sock)
+      try { rtc.rtcStart(rtcEvent) } catch { /* ignore */ }
+      const remove = () => {
+        if (rtcSock === sock) { rtcSock = null; rtcNalsActive = false }
+        try { rtc?.rtcStop() } catch { /* ignore */ }
+        try { sock.destroy() } catch { /* ignore */ }
+      }
+      const parser = new WsParser(sock, (text) => {
+        try {
+          const msg = JSON.parse(text)
+          if (msg.t === 'offer' && typeof msg.sdp === 'string') rtc.rtcSetOffer(msg.sdp)
+          else if (msg.t === 'ice' && typeof msg.mline === 'number' && typeof msg.candidate === 'string') rtc.rtcAddIce(msg.mline, msg.candidate)
+          else if (msg.t === 'pli') rtc.rtcForceKey()
+        } catch { /* ignore */ }
+      }, () => {}, remove)
+      sock.on('data', (c: Buffer) => parser.feed(c))
+      sock.on('error', remove)
+      sock.on('close', remove)
       return
     }
     wsClients.add(sock)
