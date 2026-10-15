@@ -279,6 +279,22 @@ enum MacPlayLocalization {
         "断开连接": ("中斷連線", "Disconnect"),
         "取消": ("取消", "Cancel"),
         "关闭CarPlay窗口将断开与iPhone的连接，并返回NIO Play主窗口。": ("關閉CarPlay視窗將中斷與iPhone的連線，並返回NIO Play主視窗。", "Closing the CarPlay window disconnects iPhone and returns to the NIO Play main window."),
+        // UI refresh (2026-10): four-tab settings window.
+        "车机浏览器地址": ("車機瀏覽器位址", "Car Browser Address"),
+        "无线网络密码": ("無線網路密碼", "Wi-Fi Passwords"),
+        "未连接": ("未連線", "Not Connected"),
+        "已复制": ("已複製", "Copied"),
+        "复制 HTTPS": ("複製 HTTPS", "Copy HTTPS"),
+        "复制 HTTP": ("複製 HTTP", "Copy HTTP"),
+        "等待网络…": ("等待網路…", "Waiting for network…"),
+        "已保存的网络": ("已儲存的網路", "Saved Networks"),
+        "尚未保存网络密码": ("尚未儲存網路密碼", "No saved Wi-Fi passwords yet"),
+        "当前": ("目前", "Current"),
+        "编码": ("編碼", "Encoding"),
+        "音量": ("音量", "Volume"),
+        "设备 ID": ("裝置 ID", "Device ID"),
+        "分辨率与帧率修改后需点击「应用并重新连接」生效。": ("解析度與影格率修改後需點擊「套用並重新連線」生效。", "Resolution and frame rate changes take effect after clicking “Apply and Reconnect”."),
+        "UI 缩放与安全边距在车机浏览器设置面板（⚙️ → 显示）中调整。": ("UI 縮放與安全邊距在車機瀏覽器設定面板（⚙️ → 顯示）中調整。", "UI scale and safe margins are adjusted in the car browser settings panel (⚙️ → Display)."),
     ]
 
     private static let patterns: [(NSRegularExpression, String, String)] = [
@@ -289,6 +305,7 @@ enum MacPlayLocalization {
         (try! NSRegularExpression(pattern: "^(\\d+)fps协商未启动视频，已改用(\\d+)fps重连。$"), "$1fps協商未啟動影片，已改用$2fps重新連線。", "Video did not start after $1fps negotiation. Reconnecting at $2fps."),
         (try! NSRegularExpression(pattern: "^(\\d+)fps协商未启动视频，改用(\\d+)fps重连$"), "$1fps協商未啟動影片，改用$2fps重新連線", "Video did not start after $1fps negotiation. Reconnecting at $2fps"),
         (try! NSRegularExpression(pattern: "^(内建显示器|外接显示器) · (\\d+)×(\\d+)像素 · (\\d+)Hz · (\\d+)×(\\d+)mm$"), "$1 · $2×$3像素 · $4Hz · $5×$6mm", "$1 · $2×$3 pixels · $4Hz · $5×$6mm"),
+        (try! NSRegularExpression(pattern: "^会话 (\\d+) 分钟$"), "工作階段 $1 分鐘", "Session $1 min"),
     ]
 }
 

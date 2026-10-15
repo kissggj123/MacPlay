@@ -152,6 +152,7 @@ struct MacPlayAboutView: View {
             LabeledContent("NIO Play", value: updates.currentVersion)
             LabeledContent(L("构建版本"), value: updates.build)
             LabeledContent(L("运行架构"), value: updates.architecture)
+            LabeledContent(L("设备 ID"), value: model.settings.bluetoothMAC.isEmpty ? "—" : model.settings.bluetoothMAC)
             LabeledContent(L("开源许可"), value: "GPL-3.0-or-later")
             Link(L("项目主页"), destination: URL(string: "https://github.com/kissggj123/NIOPlay")!)
             Text(L("将 Mac 变成 CarPlay 接收器，串流到车机浏览器显示和操作")).font(.callout).foregroundStyle(.secondary)

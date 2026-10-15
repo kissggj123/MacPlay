@@ -203,6 +203,10 @@ struct PlaySettings: Codable {
     @Published var firewallState = ""
     @Published var firewallNeedsAllow = false
     @Published var firewallWorking = false
+    // Fork: firewall card shows a green check once nothing needs allowing.
+    @Published var firewallAllowed = false
+    // Fork: connection-tab status card shows session duration.
+    @Published var sessionStart: Date?
     private let locationManager = CLLocationManager()
     private var networkRequestPending = false
     private var usbTimer: Timer?
@@ -305,22 +309,27 @@ struct PlaySettings: Codable {
         guard let bin = receiverBinaryPath() else {
             firewallState = L("找不到接收器程序")
             firewallNeedsAllow = false
+            firewallAllowed = false
             return
         }
         switch firewallEnabled() {
         case nil:
             firewallState = L("防火墙状态未知")
             firewallNeedsAllow = false
+            firewallAllowed = false
         case false:
             firewallState = L("防火墙已关闭，无需放行")
             firewallNeedsAllow = false
+            firewallAllowed = true
         case true:
             if firewallAllows(binaryPath: bin) {
                 firewallState = L("防火墙已开启 · MacPlayReceiver 已放行")
                 firewallNeedsAllow = false
+                firewallAllowed = true
             } else {
                 firewallState = L("防火墙已开启 · 未放行（车机可能连不上）")
                 firewallNeedsAllow = true
+                firewallAllowed = false
             }
         }
     }
@@ -348,10 +357,14 @@ struct PlaySettings: Codable {
             }
         }
     }
-    func applyLiveAudio() {
+    // Volume sliders call this on every tick — only the receiver command, no file write.
+    func sendAudioCommand() {
         let message:[String:Any]=["command":"audio","volume":settings.volume,"callVolume":settings.callVolume ?? 1,"enabled":settings.audioEnabled]
         if let data=try? JSONSerialization.data(withJSONObject:message),let line=String(data:data,encoding:.utf8){command(line)}
-        if let data=try? JSONEncoder().encode(settings){try? data.write(to:configURL,options:.atomic);try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:configURL.path)}
+    }
+    func applyLiveAudio() {
+        sendAudioCommand()
+        persistPreferences()
     }
     func showCarPlayWindow() {
         guard let task=process,task.isRunning else {return}
@@ -860,7 +873,7 @@ struct PlaySettings: Codable {
             task.terminationHandler={ [weak self] task in Task { @MainActor in
                 guard self?.process === task else {return};self?.passiveDisconnect("接收进程已退出")
             }}
-            try task.run();running=true;usbStage="等待USB握手，请保持iPhone解锁";usbError="";status="正在启动接收服务";detail=settings.wireless ? "准备蓝牙握手与共用Wi-Fi连接。" : "准备USB连接与配件认证。"
+            try task.run();running=true;sessionStart=Date();usbStage="等待USB握手，请保持iPhone解锁";usbError="";status="正在启动接收服务";detail=settings.wireless ? "准备蓝牙握手与共用Wi-Fi连接。" : "准备USB连接与配件认证。"
         } catch {status="启动失败";detail=error.localizedDescription}
     }
     func stop(restoreMain:Bool=true,preserveReconnect:Bool=false) {
@@ -874,7 +887,7 @@ struct PlaySettings: Codable {
             if task.isRunning {kill(task.processIdentifier,SIGKILL)}
             task.waitUntilExit()
         }
-        output?.fileHandleForReading.readabilityHandler=nil;process=nil;input=nil;output=nil;running=false;pending.removeAll()
+        output?.fileHandleForReading.readabilityHandler=nil;process=nil;input=nil;output=nil;running=false;sessionStart=nil;pending.removeAll()
         status="接收已停止";detail="可以调整设置后重新启动。"
         usbStage="接收服务未启动";usbError=""
         clearNowPlaying();if restoreMain {page = .connection;showMainWindow()}
@@ -987,9 +1000,8 @@ struct LogConsoleView: View {
 }
 
 enum Page: String,CaseIterable,Identifiable {
-    case connection="连接",about="关于"
+    case connection="连接",display="显示",audio="音频",about="关于"
     var id:String{rawValue}
-    var icon:String {switch self{case .connection:return "iphone.radiowaves.left.and.right";case .about:return "info.circle"}}
 }
 
 struct SettingsView: View {
@@ -997,17 +1009,85 @@ struct SettingsView: View {
     @StateObject private var updates=MacPlayUpdates()
     @State private var showLogConsole = false
     var body:some View {
-        NavigationSplitView {
-            List(Page.allCases,selection:$model.page){ item in Label(item.rawValue,systemImage:item.icon).tag(item) }
-                .navigationTitle("NIO Play").navigationSplitViewColumnWidth(min:150,ideal:165,max:200)
-        } detail: {
-            VStack(spacing:0) {
+        VStack(spacing:0) {
+            SettingsTabStrip(selection:$model.page)
+            Divider()
                 Form {
                     switch model.page ?? .connection {
                     case .connection:
+                        Section {
+                            SessionStatusCard(model:model)
+                                .listRowBackground(Color.clear)
+                                .listRowInsets(EdgeInsets(top:4,leading:16,bottom:4,trailing:16))
+                        }
+                        Section(L("车机浏览器地址")) {
+                            Text(L("在车机浏览器打开以下地址（Mac 与车机需在同一局域网）：")).font(.callout).foregroundStyle(.secondary)
+                            if model.lanAddresses.isEmpty {
+                                Text(L("等待网络…")).foregroundStyle(.secondary)
+                            } else {
+                                ForEach(model.lanAddresses, id: \.address) { item in
+                                    AddressRow(item: item)
+                                }
+                            }
+                            // Fork: iPhone USB tether + Wi-Fi hotspot share
+                            // 172.20.10.0/28 — the classic "car can't open the
+                            // page on the hotspot" trap.
+                            if model.lanSubnetConflict {
+                                Text(L("⚠️ 检测到多个网卡在同一网段（iPhone 的 USB 共享网络与 Wi-Fi 热点都是 172.20.10.x）。请使用上面「Wi-Fi」的地址；若仍无法访问，拔掉数据线或关闭 iPhone 的「USB 网络共享」后重试。")).font(.callout).foregroundStyle(.orange)
+                            }
+                            HStack {
+                                Button(L("刷新地址")) { model.refreshLanInfo() }
+                            }
+                        }
+                        .onAppear { model.refreshLanInfo() }
+                        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
+                            // Addresses move when the hotspot (re)assigns DHCP;
+                            // skip the firewall scan, that stays manual/first-load.
+                            model.refreshLanInfo(refreshFirewall: false)
+                        }
+                        Section(L("防火墙")) {
+                            HStack {
+                                Text(L(model.firewallState)).foregroundStyle(.secondary)
+                                Spacer()
+                                if model.firewallNeedsAllow {
+                                    Button(model.firewallWorking ? L("正在放行…") : L("一键放行 MacPlayReceiver")) {
+                                        model.allowFirewallForReceiver()
+                                    }
+                                    .buttonStyle(RainbowButtonStyle())
+                                    .disabled(model.firewallWorking)
+                                } else if model.firewallAllowed {
+                                    Text("✓").font(.system(size: 15, weight: .bold)).foregroundStyle(.green)
+                                }
+                            }
+                            if model.firewallNeedsAllow {
+                                Text(L("需要管理员密码。放行后车机浏览器才能访问 8080 端口。")).font(.callout).foregroundStyle(.secondary)
+                            }
+                            Button(L("打开防火墙设置")) {
+                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Firewall")!)
+                            }
+                            Text(L("局域网需放行：TCP 8080（浏览器画面/触控/音频）。iPhone 直连 CarPlay 使用系统 usbmuxd/蓝牙/Wi-Fi，走 NIO Play 自身通道。")).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Section(L("无线网络密码")) {
+                            if model.settings.wifiProfiles.isEmpty {
+                                Text(L("尚未保存网络密码")).foregroundStyle(.secondary)
+                            } else {
+                                DisclosureGroup(L("已保存的网络") + " (\(model.settings.wifiProfiles.count))") {
+                                    ForEach(Array(model.settings.wifiProfiles.keys.sorted()), id: \.self) { ssid in
+                                        HStack {
+                                            Text(ssid).font(.callout)
+                                            Spacer()
+                                            if ssid == model.settings.ssid {
+                                                Text(L("当前")).font(.caption).foregroundStyle(.green)
+                                            }
+                                            Button(L("删除")) {
+                                                model.settings.wifiProfiles.removeValue(forKey: ssid)
+                                            }.buttonStyle(.link).foregroundStyle(.red)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Section(L("接收端")) {
-                            LabeledContent(L("状态"),value:L(model.status))
-                            Text(L(model.detail)).foregroundStyle(.secondary).font(.callout).textSelection(.enabled)
                             Picker(L("iPhone"),selection:Binding(get:{model.settings.selectedPhone ?? "auto"},set:{model.settings.selectedPhone=$0=="auto" ? nil : $0})) {
                                 Text(L("自动（上次连接的iPhone）")).tag("auto")
                                 ForEach(model.phoneChoices){phone in Text(phone.name+"（"+String(phone.id.suffix(5))+"）").tag(phone.id)}
@@ -1031,80 +1111,7 @@ struct SettingsView: View {
                             Toggle(L("允许后台运行"),isOn:Binding(get:{model.settings.backgroundEnabled ?? false},set:{model.settings.backgroundEnabled=$0;MacPlayApplicationDelegate.shared?.preferencesChanged()}))
                             Toggle(L("CarPlay连接时防止系统休眠"),isOn:Binding(get:{model.settings.preventSleepWhenConnected ?? false},set:{model.settings.preventSleepWhenConnected=$0;model.persistPreferences()}))
                             Text(L("连接期间阻止系统休眠（含合盖，需连接电源），显示器仍可正常熄屏。")).font(.callout).foregroundStyle(.secondary)
-                            Toggle(L("无头模式（不在Mac上显示CarPlay画面）"),isOn:Binding(get:{model.settings.headless ?? false},set:{model.settings.headless=$0;model.persistPreferences()}))
-                            Text(L("画面仅通过浏览器串流，适合车机使用。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
-                            Toggle(L("零转码模式（M1 最佳性能，需 WebCodecs 浏览器）"),isOn:Binding(get:{model.settings.zeroTranscode ?? false},set:{model.settings.zeroTranscode=$0;model.persistPreferences()}))
-                            Text(L("跳过 Mac 端视频解码，H.264 直接转发给浏览器硬解。需配合无头模式 + Chrome/Edge 类浏览器（HTTPS）。不支持 WebCodecs 时无画面。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
-                            Toggle(L("截屏模式（兼容性最好，延迟较高）"),isOn:Binding(get:{model.settings.screenCapture ?? false},set:{model.settings.screenCapture=$0;model.persistPreferences()}))
-                            Text(L("截取 Mac 上的 CarPlay 窗口，以 MJPEG 发到浏览器。兼容所有浏览器，延迟约 200-500ms，帧率约 10fps。不能与无头模式/零转码同时用（需要 Mac 显示窗口）。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
                             Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要NIO Play保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
-                        }
-                        Section(L("车机浏览器")) {
-                            Toggle(L("打开浏览器时自动恢复播放"),isOn:Binding(get:{model.settings.autoResumeOnBrowser ?? true},set:{model.settings.autoResumeOnBrowser=$0;model.persistPreferences()}))
-                            Text(L("开启：任一设备打开浏览器页面即自动继续播放，关闭页面自动暂停（同蓝牙耳机断开）。关闭：打开浏览器仅接通声音通道，是否播放、暂停由你在画面里手动控制（尊重手动暂停）。")).font(.callout).foregroundStyle(.secondary)
-                            Text(L("在车机浏览器打开以下地址（Mac 与车机需在同一局域网）：")).font(.callout).foregroundStyle(.secondary)
-                            if model.lanAddresses.isEmpty {
-                                Text(L("未检测到局域网地址，请确认 Mac 已连接 Wi-Fi。")).foregroundStyle(.secondary)
-                            } else {
-                                ForEach(model.lanAddresses, id: \.address) { item in
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text("https://\(item.address):8443").textSelection(.enabled).font(.system(.body, design: .monospaced)).bold()
-                                                Text(L("推荐：WebCodecs 硬件解码，流畅低延迟（需信任自签证书）")).font(.caption).foregroundStyle(.secondary)
-                                            }
-                                            Spacer()
-                                            Button(L("复制 HTTPS")) {
-                                                NSPasteboard.general.clearContents()
-                                                NSPasteboard.general.setString("https://\(item.address):8443", forType: .string)
-                                            }
-                                        }
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text("http://\(item.address):8080").textSelection(.enabled).font(.system(.callout, design: .monospaced))
-                                                // Fork: friendly interface label; flag the
-                                                // iPhone USB tether address explicitly.
-                                                Text(item.iphoneUSB ? L("iPhone USB 网络（与热点同网段，车机无法访问，勿用）") : (item.name == "en0" ? L("Wi-Fi") : item.name)).font(.caption2).foregroundStyle(item.iphoneUSB ? Color.orange : Color.secondary)
-                                            }
-                                            Spacer()
-                                            Button(L("复制 HTTP")) {
-                                                NSPasteboard.general.clearContents()
-                                                NSPasteboard.general.setString("http://\(item.address):8080", forType: .string)
-                                            }
-                                        }
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                            }
-                            // Fork: iPhone USB tether + Wi-Fi hotspot share
-                            // 172.20.10.0/28 — the classic "car can't open the
-                            // page on the hotspot" trap.
-                            if model.lanSubnetConflict {
-                                Text(L("⚠️ 检测到多个网卡在同一网段（iPhone 的 USB 共享网络与 Wi-Fi 热点都是 172.20.10.x）。请使用上面「Wi-Fi」的地址；若仍无法访问，拔掉数据线或关闭 iPhone 的「USB 网络共享」后重试。")).font(.callout).foregroundStyle(.orange)
-                            }
-                            HStack {
-                                Text(L("防火墙"))
-                                Spacer()
-                                Text(model.firewallState).foregroundStyle(.secondary)
-                            }
-                            if model.firewallNeedsAllow {
-                                Button(model.firewallWorking ? L("正在放行…") : L("一键放行 MacPlayReceiver")) {
-                                    model.allowFirewallForReceiver()
-                                }.disabled(model.firewallWorking)
-                                Text(L("需要管理员密码。放行后车机浏览器才能访问 8080 端口。")).font(.callout).foregroundStyle(.secondary)
-                            }
-                            HStack {
-                                Button(L("刷新地址")) { model.refreshLanInfo() }
-                                Button(L("打开防火墙设置")) {
-                                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Firewall")!)
-                                }
-                            }
-                            Text(L("局域网需放行：TCP 8080（浏览器画面/触控/音频）。iPhone 直连 CarPlay 使用系统 usbmuxd/蓝牙/Wi-Fi，走 NIO Play 自身通道。")).font(.callout).foregroundStyle(.secondary)
-                        }.onAppear { model.refreshLanInfo() }
-                        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
-                            // Addresses move when the hotspot (re)assigns DHCP;
-                            // skip the firewall scan, that stays manual/first-load.
-                            model.refreshLanInfo(refreshFirewall: false)
                         }
                         if !model.settings.wireless {Section(L("USB直连")) {
                             LabeledContent(L("设备"),value:L(model.usbStatus))
@@ -1144,25 +1151,85 @@ struct SettingsView: View {
                                 Text(L(model.networkStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                                 if !model.passwordStatus.isEmpty {Text(L(model.passwordStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                                 }
-                                // Fork: saved WiFi profiles management
-                                if !model.settings.wifiProfiles.isEmpty {
-                                    DisclosureGroup(L("已保存的网络配置 (\(model.settings.wifiProfiles.count))")) {
-                                        ForEach(Array(model.settings.wifiProfiles.keys.sorted()), id: \.self) { ssid in
-                                            HStack {
-                                                Text(ssid).font(.callout)
-                                                Spacer()
-                                                if ssid == model.settings.ssid {
-                                                    Text(L("当前")).font(.caption).foregroundStyle(.green)
-                                                }
-                                                Button(L("删除")) {
-                                                    model.settings.wifiProfiles.removeValue(forKey: ssid)
-                                                }.buttonStyle(.link).foregroundStyle(.red)
-                                            }
-                                        }
-                                    }
-                                }
                                 Text(L("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为NIO Play的Wi-Fi。填写SSID与共享密码，或授权读取已保存的密码。802.1X企业Wi-Fi的用户名、个人密码或证书不能作为共享密码发送。")).font(.callout).foregroundStyle(.secondary)
                             }
+                        }
+                    case .display:
+                        Section(L("分辨率")) {
+                            Picker(L("分辨率"),selection:Binding(get:{model.settings.resolution},set:{
+                                model.settings.resolution=$0;model.updateResolution();model.persistPreferences()
+                            })) {
+                                Text(L("屏幕原生像素（避开刘海）")).tag("native")
+                                Text("800×480").tag("800x480")
+                                Text("1280×720").tag("1280x720")
+                                Text("1920×720").tag("1920x720")
+                                Text("1920×1080").tag("1920x1080")
+                                Text("2560×1440").tag("2560x1440")
+                                Text(L("自定义")).tag("custom")
+                            }
+                            if model.settings.resolution == "custom" {
+                                HStack {
+                                    TextField(L("宽度（像素）"),value:Binding(get:{model.settings.width},set:{model.settings.width=$0;model.persistPreferences()}),format:.number.grouping(.never)).frame(width:110)
+                                    TextField(L("高度（像素）"),value:Binding(get:{model.settings.height},set:{model.settings.height=$0;model.persistPreferences()}),format:.number.grouping(.never)).frame(width:110)
+                                }
+                            } else {
+                                LabeledContent(L("请求像素"),value:"\(model.settings.width)×\(model.settings.height)")
+                            }
+                            Text(L("分辨率与帧率修改后需点击「应用并重新连接」生效。")).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Section(L("最高帧率")) {
+                            Picker(L("最高帧率"),selection:Binding(get:{model.settings.fps},set:{model.settings.fps=$0;model.persistPreferences()})) {
+                                Text("30 fps").tag(30)
+                                Text("60 fps").tag(60)
+                                Text("90 fps").tag(90)
+                                Text("120 fps").tag(120)
+                            }.pickerStyle(.segmented)
+                        }
+                        Section(L("编码")) {
+                            Toggle(L("无头模式（不在Mac上显示CarPlay画面）"),isOn:Binding(get:{model.settings.headless ?? false},set:{model.settings.headless=$0;model.persistPreferences()}))
+                            Text(L("画面仅通过浏览器串流，适合车机使用。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
+                            Toggle(L("零转码模式（M1 最佳性能，需 WebCodecs 浏览器）"),isOn:Binding(get:{model.settings.zeroTranscode ?? false},set:{model.settings.zeroTranscode=$0;model.persistPreferences()}))
+                            Text(L("跳过 Mac 端视频解码，H.264 直接转发给浏览器硬解。需配合无头模式 + Chrome/Edge 类浏览器（HTTPS）。不支持 WebCodecs 时无画面。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
+                            Toggle(L("截屏模式（兼容性最好，延迟较高）"),isOn:Binding(get:{model.settings.screenCapture ?? false},set:{model.settings.screenCapture=$0;model.persistPreferences()}))
+                            Text(L("截取 Mac 上的 CarPlay 窗口，以 MJPEG 发到浏览器。兼容所有浏览器，延迟约 200-500ms，帧率约 10fps。不能与无头模式/零转码同时用（需要 Mac 显示窗口）。切换后重新连接生效。")).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Section {
+                            Text(L("UI 缩放与安全边距在车机浏览器设置面板（⚙️ → 显示）中调整。")).font(.callout).foregroundStyle(.secondary)
+                        }
+                    case .audio:
+                        Section(L("CarPlay声音")) {
+                            VStack(alignment:.leading,spacing:4) {
+                                Text(L("媒体音量")).font(.callout)
+                                Slider(value:Binding(get:{model.settings.volume},set:{
+                                    model.settings.volume=$0;model.sendAudioCommand()
+                                }),in:0...1) { editing in
+                                    if !editing {model.persistPreferences()}
+                                }
+                                Text("\(Int((model.settings.volume).rounded()*100))%").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                            }
+                            VStack(alignment:.leading,spacing:4) {
+                                Text(L("通话音量")).font(.callout)
+                                Slider(value:Binding(get:{model.settings.callVolume ?? 1},set:{
+                                    model.settings.callVolume=$0;model.sendAudioCommand()
+                                }),in:0...1) { editing in
+                                    if !editing {model.persistPreferences()}
+                                }
+                                Text("\(Int(((model.settings.callVolume ?? 1)).rounded()*100))%").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                            }
+                            Toggle(L("打开浏览器时自动恢复播放"),isOn:Binding(get:{model.settings.autoResumeOnBrowser ?? true},set:{model.settings.autoResumeOnBrowser=$0;model.persistPreferences()}))
+                            Text(L("开启：任一设备打开浏览器页面即自动继续播放，关闭页面自动暂停（同蓝牙耳机断开）。关闭：打开浏览器仅接通声音通道，是否播放、暂停由你在画面里手动控制（尊重手动暂停）。")).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Section(L("设备")) {
+                            Picker(L("输出设备"),selection:Binding(get:{model.settings.outputDevice ?? ""},set:{model.settings.outputDevice=$0.isEmpty ? nil : $0;model.persistPreferences()})) {
+                                Text(L("系统默认设备")).tag("")
+                                ForEach(model.audioOutputs){device in Text(device.name).tag(device.id)}
+                            }
+                            Picker(L("输入设备"),selection:Binding(get:{model.settings.inputDevice ?? ""},set:{model.settings.inputDevice=$0.isEmpty ? nil : $0;model.persistPreferences()})) {
+                                Text(L("系统默认设备")).tag("")
+                                ForEach(model.audioInputs){device in Text(device.name).tag(device.id)}
+                            }
+                            Button(L("刷新设备")){model.refreshHardware()}
+                            Text(L("媒体与通话音量实时生效；设备切换后应用并重新连接。默认跟随系统设备，麦克风使用需要系统授权。")).font(.callout).foregroundStyle(.secondary)
                         }
                     case .about:
                         MacPlayAboutView(model:model,updates:updates)
@@ -1182,8 +1249,8 @@ struct SettingsView: View {
                     Button(L(model.running ? "应用并重新连接" : "启动接收")){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
                 }
-            }.navigationTitle(L((model.page ?? .connection).rawValue))
-        }.frame(minWidth:900,minHeight:560)
+        }
+        .frame(minWidth:520,minHeight:480)
         .environment(\.locale,Locale(identifier:MacPlayLocalization.effectiveLanguage))
         .onChange(of:model.settings.ssid){_,_ in model.passwordStatus=""}
         .onAppear{updates.startAutomaticChecks()}
@@ -1192,6 +1259,158 @@ struct SettingsView: View {
             Button(L("稍后"),role:.cancel){updates.dismissPrompt()}
         } message:{Text("NIO Play \(updates.release?.version?.description ?? "")")}
         .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in model.detectNetwork();model.refreshUSB();model.refreshHardware();if model.settings.language == nil || model.settings.language == "system" {model.setLanguage("system")}}
+    }
+}
+
+// Rainbow accent, used sparingly: tab underline, primary buttons, status card.
+extension LinearGradient {
+    static let rainbowColors: [Color] = [
+        Color(red: 1.0, green: 0.373, blue: 0.427),
+        Color(red: 1.0, green: 0.698, blue: 0.420),
+        Color(red: 1.0, green: 0.902, blue: 0.420),
+        Color(red: 0.420, green: 0.831, blue: 0.498),
+        Color(red: 0.310, green: 0.765, blue: 0.969),
+        Color(red: 0.690, green: 0.420, blue: 0.961),
+    ]
+    static var rainbow: LinearGradient {
+        LinearGradient(colors: rainbowColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    static var rainbowHorizontal: LinearGradient {
+        LinearGradient(colors: rainbowColors, startPoint: .leading, endPoint: .trailing)
+    }
+    static var rainbowSoft: LinearGradient {
+        LinearGradient(colors: rainbowColors.map { $0.opacity(0.14) }, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+struct RainbowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(LinearGradient.rainbow))
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+    }
+}
+
+struct SettingsTabStrip: View {
+    @Binding var selection: Page?
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Page.allCases) { page in
+                tabButton(page)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+    }
+    private func tabButton(_ page: Page) -> some View {
+        let active = (selection ?? .connection) == page
+        return Button {
+            withAnimation(.easeOut(duration: 0.15)) { selection = page }
+        } label: {
+            VStack(spacing: 5) {
+                Text(L(page.rawValue))
+                    .font(.system(size: 13, weight: active ? .semibold : .regular))
+                    .foregroundStyle(active ? Color.primary : Color.secondary)
+                Capsule()
+                    .fill(active ? AnyShapeStyle(LinearGradient.rainbowHorizontal) : AnyShapeStyle(Color.clear))
+                    .frame(height: 3)
+            }
+            .padding(.horizontal, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// Connection tab: light rainbow gradient card with dot + device + duration + res/fps.
+struct SessionStatusCard: View {
+    @ObservedObject var model: PlayModel
+    private var dotColor: Color {
+        if model.running { return Color(red: 0.20, green: 0.78, blue: 0.35) }
+        if model.receivingOrWaiting { return .orange }
+        return Color(nsColor: .systemGray)
+    }
+    private var deviceName: String {
+        let id = model.settings.selectedPhone ?? model.settings.lastPhone
+        if let phone = model.phoneChoices.first(where: { $0.id == id }) { return phone.name }
+        return model.running || model.receivingOrWaiting ? "iPhone" : L("未连接")
+    }
+    private var metaLine: String {
+        var parts = [L(model.settings.wireless ? "无线CarPlay" : "有线CarPlay")]
+        if model.running, let start = model.sessionStart {
+            let minutes = max(1, Int(Date().timeIntervalSince(start) / 60))
+            parts.append(L("会话 \(minutes) 分钟"))
+        }
+        parts.append("\(model.settings.width)×\(model.settings.height) · \(model.settings.fps)fps")
+        return parts.joined(separator: " · ")
+    }
+    var body: some View {
+        HStack(spacing: 12) {
+            Circle().fill(dotColor).frame(width: 10, height: 10)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(deviceName).font(.system(size: 14, weight: .semibold))
+                TimelineView(.periodic(from: .now, by: 30)) { _ in
+                    Text(metaLine).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                if !model.detail.isEmpty {
+                    Text(L(model.detail)).font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            }
+            Spacer()
+            Text(L(model.status)).font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(LinearGradient.rainbowSoft))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.06)))
+    }
+}
+
+// Connection tab: one interface row — HTTPS main + HTTP secondary, with copy feedback.
+struct AddressRow: View {
+    let item: (name: String, address: String, network: String, iphoneUSB: Bool)
+    @State private var copied: String?
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { if copied == text { copied = nil } }
+    }
+    private var interfaceLabel: String {
+        item.iphoneUSB ? L("iPhone USB 网络（与热点同网段，车机无法访问，勿用）") : (item.name == "en0" ? L("Wi-Fi") : item.name)
+    }
+    private var interfaceColor: Color {
+        item.iphoneUSB ? .orange : (item.name == "en0" ? Color(red: 0.20, green: 0.70, blue: 0.35) : .secondary)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("https://\(item.address):8443")
+                    .font(.system(.body, design: .monospaced)).bold().textSelection(.enabled)
+                Spacer()
+                Button { copy("https://\(item.address):8443") } label: {
+                    Text(copied == "https://\(item.address):8443" ? L("已复制") : L("复制 HTTPS"))
+                }
+                .buttonStyle(RainbowButtonStyle())
+            }
+            HStack {
+                Text("http://\(item.address):8080")
+                    .font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                Spacer()
+                Button { copy("http://\(item.address):8080") } label: {
+                    Text(copied == "http://\(item.address):8080" ? L("已复制") : L("复制 HTTP"))
+                }.buttonStyle(.bordered)
+            }
+            Text(interfaceLabel).font(.caption2).foregroundStyle(interfaceColor)
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -1213,7 +1432,7 @@ private struct MainWindowContent: View {
     @StateObject private var model=PlayModel()
     var body:some Scene {
         Window("NIO Play",id:"main") {MainWindowContent(model:model,delegate:delegate)}
-            .defaultSize(width:820,height:650)
+            .defaultSize(width:560,height:540)
             .commands {CommandGroup(replacing:.newItem){};CommandGroup(after:.appInfo){Button(L("启动接收")){model.start()};Button(L("停止接收")){model.stop()}}}
     }
 }
