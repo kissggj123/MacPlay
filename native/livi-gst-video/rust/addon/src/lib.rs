@@ -7,6 +7,7 @@ mod audio_recv;
 mod h264direct;
 mod mic_uplink;
 mod screen_recv;
+mod rtc;
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -523,3 +524,32 @@ pub fn audio_statistics() -> String {audio_recv::statistics()}
 #[cfg(target_os="macos")]
 #[napi]
 pub fn microphone_permission() -> i32 {unsafe {macplay_microphone_permission()}}
+
+/// WebRTC passthrough availability (webrtcbin + dtls/nice present).
+#[napi]
+pub fn rtc_supported() -> bool { rtc::supported() }
+
+/// Starts the webrtc pipeline. `on_event` receives JSON strings:
+/// {t:"answer",sdp} | {t:"ice",mline,candidate} | {t:"connected"} | {t:"state",state}.
+#[napi]
+pub fn rtc_start(on_event: napi::JsFunction) -> bool { rtc::start(on_event) }
+
+/// Applies the browser's SDP offer; the answer arrives via the event callback.
+#[napi]
+pub fn rtc_set_offer(sdp: String) -> bool { rtc::set_offer(&sdp) }
+
+/// Adds a browser ICE candidate.
+#[napi]
+pub fn rtc_add_ice(mline: u32, candidate: String) -> bool { rtc::add_ice(mline, &candidate) }
+
+/// Asks the pipeline for a keyframe (best-effort upstream force-key-unit).
+#[napi]
+pub fn rtc_force_key() { rtc::force_key() }
+
+/// Feeds one Annex B NAL unit (with start code). Dropped unless connected.
+#[napi]
+pub fn rtc_push_nal(nal: Buffer) -> bool { rtc::push_nal(nal.as_ref()) }
+
+/// Tears the webrtc session down.
+#[napi]
+pub fn rtc_stop() { rtc::stop() }

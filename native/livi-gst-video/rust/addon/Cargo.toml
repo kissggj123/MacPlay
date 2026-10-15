@@ -18,6 +18,11 @@ livi-screen-stream = { path = "../screen" }
 livi-video-nal = { path = "../nal" }
 livi-video-player = { path = "../player" }
 socket2 = "0.6"
+gstreamer = { version = "0.24", features = ["v1_24"] }
+gstreamer-app = { version = "0.24", features = ["v1_24"] }
+gstreamer-video = { version = "0.24", features = ["v1_24"] }
+gstreamer-webrtc = { version = "0.24", features = ["v1_24"] }
+gstreamer-sdp = { version = "0.24", features = ["v1_24"] }
 napi = { version = "2", default-features = false, features = ["napi8"] }
 napi-derive = "2"
 
