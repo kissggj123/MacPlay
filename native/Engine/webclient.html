@@ -237,6 +237,7 @@
     if (health && health.codec) {
       var codecSel=document.getElementById('codec');
       if (codecSel) codecSel.value = health.codec === 'h265' ? 'hevc' : 'h264';
+      window._healthCodec = health.codec;
     }
   } catch (e) {}
   var canvas=document.getElementById('c'), ctx2d=null;
@@ -358,7 +359,11 @@
         // Fork: watchdog - request keyframe if no frames decoded in 2.5s
         armKeyframeWatchdog();
         if(wsReady) send({t:'keyframe'}); // WebCodecs needs a key chunk first
-      }catch(e){ decoderConfigured=false; }
+      }catch(e){ 
+        decoderConfigured=false; 
+        var w=document.getElementById('waiting');
+        if(w) w.innerHTML='解码器配置失败: '+(e&&e.message?e.message:e)+'<br>codec='+best.codec;
+      }
     }else{
       var codec=codecStringFromSps(cfg.sps);
       var desc=buildAvcC(cfg.sps,cfg.pps);
@@ -506,6 +511,7 @@
   }
   function feedNal(nal){
     var t=nalType(nal);
+    if(window._debugNal!==t){ window._debugNal=t; console.log('[NAL] type='+t+' codec='+videoCodec); }
     if(videoCodec==='h265'){
       if(t===32){ cacheParam('vps',nal); return; }
       if(t===33){ cacheParam('sps',nal); return; }
@@ -555,6 +561,28 @@
     var proto=location.protocol==='https:'?'wss':'ws';
     h264ws=new WebSocket(proto+'://'+location.host+'/h264');
     h264ws.binaryType='arraybuffer';
+    // Fork: poll /health for codec changes (server doesn't push to existing clients)
+    setInterval(function(){
+      try{
+        var xhr=new XMLHttpRequest();
+        xhr.open('GET','/health',true);
+        xhr.onload=function(){
+          if(xhr.status===200){
+            try{
+              var h=JSON.parse(xhr.responseText);
+              if(h.codec&&h.codec!==videoCodec){
+                console.log('[codec] changed via /health: '+videoCodec+' -> '+h.codec);
+                videoCodec=h.codec;
+                spsPps=null; decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+                try{ videoDecoder.close(); }catch(e){}
+                makeDecoder();
+              }
+            }catch(e){}
+          }
+        };
+        xhr.send();
+      }catch(e){}
+    }, 2000);
     h264ws.onmessage=function(ev){
       // Fork: first message is JSON with codec info
       if(typeof ev.data==='string'){
@@ -574,8 +602,9 @@
       var data=new Uint8Array(ev.data); bytesCount+=data.length;
       var units=parseNalUnits(data);
       for(var i=0;i<units.length;i++) feedNal(units[i]);
-      // a stalled partial access unit is flushed by age
-      if(auBuf.length&&Date.now()-auPendingSince>150) flushAu();
+      // Old server format: each message is a complete frame, flush immediately
+      // (don't wait 150ms for auBuf)
+      if(auBuf.length) flushAu();
       var hasConfig = videoCodec==='h265' ?
         (spsPps&&spsPps.vps&&spsPps.sps&&spsPps.pps) :
         (spsPps&&spsPps.sps&&spsPps.pps);

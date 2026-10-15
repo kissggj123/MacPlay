@@ -75,55 +75,31 @@ impl Forwarder {
         if self.clients.is_empty() || nal.is_empty() {
             return;
         }
-        // A CarPlay frame body is a run of 4-byte-BE-length-prefixed NALs (one
-        // access unit: AUD/SEI + slices), not a single NAL. Split it into one
-        // Annex B message per NAL so the browser side can reassemble frames.
-        let payloads: Vec<Vec<u8>> = if has_start_code(nal) {
-            vec![nal.to_vec()]
-        } else {
-            let split = split_length_prefixed(nal);
-            if split.is_empty() {
-                // Not a clean length-prefixed run: forward as one NAL.
-                let mut v = Vec::with_capacity(4 + nal.len());
-                v.extend_from_slice(&START_CODE);
-                v.extend_from_slice(nal);
-                vec![v]
+        // The NAL from iPhone may be length-prefixed (4-byte BE length).
+        // Strip it if present, then ensure Annex B start code.
+        let raw_nal: &[u8] = if nal.len() > 4 && !has_start_code(nal) {
+            let len = u32::from_be_bytes([nal[0], nal[1], nal[2], nal[3]]) as usize;
+            if len == nal.len() - 4 {
+                &nal[4..]
             } else {
-                split
+                nal
             }
+        } else {
+            nal
         };
-        for payload in &payloads {
-            let len_bytes = (payload.len() as u32).to_be_bytes();
-            self.clients.retain_mut(|client| {
-                client.write_all(&len_bytes).is_ok() && client.write_all(payload).is_ok()
-            });
-        }
+        let payload: Vec<u8> = if has_start_code(raw_nal) {
+            raw_nal.to_vec()
+        } else {
+            let mut v = Vec::with_capacity(4 + raw_nal.len());
+            v.extend_from_slice(&START_CODE);
+            v.extend_from_slice(raw_nal);
+            v
+        };
+        let len_bytes = (payload.len() as u32).to_be_bytes();
+        self.clients.retain_mut(|client| {
+            client.write_all(&len_bytes).is_ok() && client.write_all(&payload).is_ok()
+        });
     }
-}
-
-/// Split a length-prefixed NAL run into Annex B NALs. Empty when the buffer is
-/// not covered exactly by whole [u32 BE length][NAL] pairs (see
-/// livi_video_nal::classify_length_prefixed for the same walk).
-fn split_length_prefixed(body: &[u8]) -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut off = 0usize;
-    while off + 4 <= body.len() {
-        let nlen =
-            u32::from_be_bytes([body[off], body[off + 1], body[off + 2], body[off + 3]]) as usize;
-        off += 4;
-        if nlen == 0 || off + nlen > body.len() {
-            return Vec::new();
-        }
-        let mut v = Vec::with_capacity(4 + nlen);
-        v.extend_from_slice(&START_CODE);
-        v.extend_from_slice(&body[off..off + nlen]);
-        out.push(v);
-        off += nlen;
-    }
-    if off != body.len() {
-        return Vec::new();
-    }
-    out
 }
 
 fn has_start_code(nal: &[u8]) -> bool {
@@ -282,41 +258,4 @@ pub fn start_server(port: u16) {
             }
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn lp(nal: &[u8]) -> Vec<u8> {
-        let mut v = (nal.len() as u32).to_be_bytes().to_vec();
-        v.extend_from_slice(nal);
-        v
-    }
-
-    #[test]
-    fn a_single_nal_body_becomes_one_annex_b_message() {
-        let out = split_length_prefixed(&lp(&[0x26, 0x01, 0xaa]));
-        assert_eq!(out, vec![vec![0, 0, 0, 1, 0x26, 0x01, 0xaa]]);
-    }
-
-    #[test]
-    fn a_multi_nal_access_unit_is_split_per_nal() {
-        let body = [lp(&[0x47, 0x01, 0x00]), lp(&[0x02, 0x00]), lp(&[0x26, 0x01, 0xbb])].concat();
-        let out = split_length_prefixed(&body);
-        assert_eq!(out.len(), 3);
-        assert_eq!(out[0], vec![0, 0, 0, 1, 0x47, 0x01, 0x00]);
-        assert_eq!(out[2], vec![0, 0, 0, 1, 0x26, 0x01, 0xbb]);
-    }
-
-    #[test]
-    fn a_body_not_covered_exactly_is_rejected() {
-        // trailing bytes after the last NAL
-        let mut body = lp(&[0x26, 0x01]);
-        body.extend_from_slice(&[0xff]);
-        assert!(split_length_prefixed(&body).is_empty());
-        // announced length running past the end
-        assert!(split_length_prefixed(&[0, 0, 0, 9, 0x26]).is_empty());
-        assert!(split_length_prefixed(&[]).is_empty());
-    }
 }
