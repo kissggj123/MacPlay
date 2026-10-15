@@ -19,3 +19,4 @@ assets/gstreamer/**/lib/gstreamer-1.0/
 !assets/authentication/
 !assets/authentication/identity.pk8
 !assets/authentication/certificate.p7b
+.superpowers/
