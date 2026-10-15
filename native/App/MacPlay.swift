@@ -8,6 +8,7 @@ import Combine
 import Security
 import CoreAudio
 import MediaPlayer
+import ServiceManagement
 import Darwin
 
 struct DisplayChoice: Identifiable {
@@ -121,6 +122,7 @@ struct PlaySettings: Codable {
     var autoReconnect: Bool? = nil
     var autoStartUSB: Bool? = nil
     var backgroundEnabled: Bool? = nil
+    var launchAtLogin: Bool? = nil
     var preventSleepWhenConnected: Bool? = nil
     var headless: Bool? = nil
     var zeroTranscode: Bool? = nil
@@ -384,6 +386,26 @@ struct PlaySettings: Codable {
             if window.isMiniaturized {window.deminiaturize(nil)}
             window.makeKeyAndOrderFront(nil)
         }
+    }
+    // Fork: launch-at-login. UI state always reads SMAppService directly —
+    // never the settings cache. Settings toggle and menu bar checkbox both
+    // route through this single entry point.
+    var launchAtLoginEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    func setLaunchAtLogin(_ enable: Bool) {
+        let service = SMAppService.mainApp
+        do {
+            if enable {
+                if service.status != .enabled { try service.register() }
+            } else {
+                if service.status == .enabled { try service.unregister() }
+            }
+            settings.launchAtLogin = enable
+            persistPreferences()
+        } catch {
+            status = L("登录项注册失败")
+            detail = error.localizedDescription
+        }
+        MacPlayApplicationDelegate.shared?.preferencesChanged()
     }
     func persistPreferences() {
         guard let data=try? JSONEncoder().encode(settings) else {return}
@@ -1115,6 +1137,7 @@ struct SettingsView: View {
                             }
                             Toggle(L("USB接入时自动启动CarPlay"),isOn:Binding(get:{model.settings.autoStartUSB ?? false},set:{model.settings.autoStartUSB=$0;model.persistPreferences();if $0 {model.startForUSBIfNeeded(model.currentUSBIDs)}}))
                             Toggle(L("允许后台运行"),isOn:Binding(get:{model.settings.backgroundEnabled ?? false},set:{model.settings.backgroundEnabled=$0;MacPlayApplicationDelegate.shared?.preferencesChanged()}))
+                            Toggle(L("登录时启动"),isOn:Binding(get:{model.launchAtLoginEnabled},set:{model.setLaunchAtLogin($0)}))
                             Toggle(L("CarPlay连接时防止系统休眠"),isOn:Binding(get:{model.settings.preventSleepWhenConnected ?? false},set:{model.settings.preventSleepWhenConnected=$0;model.persistPreferences()}))
                             Text(L("连接期间阻止系统休眠（含合盖，需连接电源），显示器仍可正常熄屏。")).font(.callout).foregroundStyle(.secondary)
                             Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要NIO Play保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
