@@ -32,6 +32,21 @@ if [[ ! -d "assets/gstreamer/macos-arm64/lib/gstreamer-1.0" ]]; then
   hdiutil detach "$MOUNT_DIR" 2>/dev/null || diskutil eject "$MOUNT_DIR" 2>/dev/null || true
   rm -rf "$MOUNT_DIR"
 fi
+# WebRTC stack (webrtc/dtls/nice/srtp) is not part of the upstream release
+# runtime. Add it from a local Homebrew prefix when available (1.28.x plugins
+# are ABI-compatible with the bundled 1.28.7 core); the bundling script
+# rewrites all Homebrew paths to @rpath so the DMG stays self-contained.
+if [[ ! -f "assets/gstreamer/macos-arm64/lib/gstreamer-1.0/libgstwebrtc.dylib" ]]; then
+  if [[ -x /opt/homebrew/bin/brew && -f /opt/homebrew/lib/gstreamer-1.0/libgstwebrtc.dylib ]]; then
+    echo "==> Adding WebRTC plugins to bundled GStreamer from Homebrew..."
+    brew list --versions libnice-gstreamer >/dev/null 2>&1 || brew install libnice-gstreamer
+    python3 scripts/prepare-webrtc-gstreamer.py /opt/homebrew arm64 \
+      libgio-2.0.0.dylib libglib-2.0.0.dylib libgobject-2.0.0.dylib \
+      libgmodule-2.0.0.dylib libgthread-2.0.0.dylib libintl.8.dylib
+  else
+    echo "==> WARNING: bundled GStreamer has no WebRTC plugins and no Homebrew GStreamer found; WebRTC passthrough will be disabled at runtime."
+  fi
+fi
 if [[ "$TARGET_ARCH" != arm64 ]]; then
   GST_VERSION="$(cat assets/gstreamer/macos-arm64/version.txt | head -1 | sed 's/[^0-9.]*//g')"
   # The bundled patched applemedia plugin currently has only an ARM slice.
