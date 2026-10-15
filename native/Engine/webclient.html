@@ -243,6 +243,7 @@
   var canvas=document.getElementById('c'), ctx2d=null;
   var h264ws=null, videoDecoder=null, decoderConfigured=false;
   var spsPps=null, frameCount=0, bytesCount=0, lastStatTime=Date.now();
+  var droppedFrames=0, rttMs=null, audioUnderruns=0;
   var hud=document.getElementById('hud');
 
   function updateHud(mode, extra){
@@ -250,7 +251,11 @@
     var now=Date.now(), dt=(now-lastStatTime)/1000;
     var fps=dt>0?(frameCount/dt).toFixed(1):'0';
     var kbps=dt>0?((bytesCount*8/dt)/1000).toFixed(0):'0';
-    hud.textContent=mode+'\n'+fps+' fps  '+kbps+' kbps'+(extra?'\n'+extra:'');
+    var stats='';
+    if(droppedFrames>0) stats+='  丢帧'+droppedFrames;
+    if(rttMs!==null) stats+='  '+rttMs+'ms';
+    if(audioUnderruns>0) stats+='  欠载'+audioUnderruns;
+    hud.textContent=mode+'\n'+fps+' fps  '+kbps+' kbps'+stats+(extra?'\n'+extra:'');
     if(dt>=1){ frameCount=0; bytesCount=0; lastStatTime=now; }
   }
 
@@ -531,14 +536,28 @@
 
   var videoCodec='h264', ts=0; // codec set from server's first text message
 
+  // Spec (2026-10-15 round 2): decode-paced drawing makes recovery look like
+  // fast-forward. Keep only the newest frame and paint on rAF instead.
+  var pendingFrame=null, renderQueued=false;
+  function dropPendingFrame(){ if(pendingFrame){ try{pendingFrame.close();}catch(e){} pendingFrame=null; } }
+  function renderLoop(){
+    renderQueued=false;
+    if(!ctx2d) return;
+    var frame=pendingFrame; if(!frame) return;
+    pendingFrame=null;
+    if(canvas.width!==frame.displayWidth||canvas.height!==frame.displayHeight){
+      canvas.width=frame.displayWidth; canvas.height=frame.displayHeight;
+    }
+    ctx2d.drawImage(frame,0,0); frame.close();
+    if(!imgShown){ imgShown=true; waiting.style.display='none'; }
+  }
+
   function makeDecoder(){
     videoDecoder=new VideoDecoder({
       output:function(frame){
-        if(canvas.width!==frame.displayWidth||canvas.height!==frame.displayHeight){
-          canvas.width=frame.displayWidth; canvas.height=frame.displayHeight;
-        }
-        ctx2d.drawImage(frame,0,0); frame.close();
-        if(!imgShown){ imgShown=true; waiting.style.display='none'; }
+        if(pendingFrame){ droppedFrames++; dropPendingFrame(); }
+        pendingFrame=frame;
+        if(!renderQueued){ renderQueued=true; requestAnimationFrame(renderLoop); }
         frameCount++;
         onFrameDecoded(); // Fork: PlayPort-style keyframe watchdog
       },
@@ -557,6 +576,7 @@
     canvas.style.display='block'; img.style.display='none';
     ctx2d=canvas.getContext('2d');
     decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+    dropPendingFrame();
     makeDecoder();
     var proto=location.protocol==='https:'?'wss':'ws';
     h264ws=new WebSocket(proto+'://'+location.host+'/h264');
@@ -573,7 +593,7 @@
               if(h.codec&&h.codec!==videoCodec){
                 console.log('[codec] changed via /health: '+videoCodec+' -> '+h.codec);
                 videoCodec=h.codec;
-                spsPps=null; decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+                spsPps=null; decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[]; dropPendingFrame();
                 try{ videoDecoder.close(); }catch(e){}
                 makeDecoder();
               }
@@ -592,7 +612,7 @@
           if(msg.codec&&msg.codec!==videoCodec){
             videoCodec=msg.codec;
             // a different stream needs a fresh decoder
-            spsPps=null; decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[];
+            spsPps=null; decoderConfigured=false; sawKeyAfterConfig=false; auBuf=[]; dropPendingFrame();
             try{ videoDecoder.close(); }catch(e){}
             makeDecoder();
           }
