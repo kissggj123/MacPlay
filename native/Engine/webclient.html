@@ -886,6 +886,15 @@
     var h=(useWebCodecs?canvas.height:img.naturalHeight)||Math.round(960*9/16);
     return {w:w,h:h,el:el};
   }
+  // Spec: getBoundingClientRect forces layout; cache per element-size and
+  // invalidate on resize / safe-margin changes.
+  var rectCache={el:null,w:0,h:0,rect:null};
+  function videoRect(el,w,h){
+    if(!rectCache.rect||rectCache.el!==el||rectCache.w!==w||rectCache.h!==h){
+      rectCache={el:el,w:w,h:h,rect:el.getBoundingClientRect()};
+    }
+    return rectCache.rect;
+  }
   // Fork (weak-network): WheelPlay-style outbound backpressure. Touch pushes
   // carry the FULL active state (idempotent), so move-only updates are safely
   // droppable when the link is congested — the next push re-sends the latest
@@ -905,7 +914,7 @@
   function onPointerDown(e){
     e.preventDefault();
     try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(err){}
-    var s=videoSize(), p=mapPoint(e.clientX,e.clientY,s.el.getBoundingClientRect(),s.w,s.h,false);
+    var s=videoSize(), p=mapPoint(e.clientX,e.clientY,videoRect(s.el,s.w,s.h),s.w,s.h,false);
     if(!p) return;
     active.set(e.pointerId,{x:p.x,y:p.y,down:true,id:slot(e.pointerId)});
     push();
@@ -916,7 +925,7 @@
   function onPointerMove(e){
     var c=active.get(e.pointerId); if(!c) return;
     e.preventDefault();
-    var s=videoSize(), p=mapPoint(e.clientX,e.clientY,s.el.getBoundingClientRect(),s.w,s.h,true);
+    var s=videoSize(), p=mapPoint(e.clientX,e.clientY,videoRect(s.el,s.w,s.h),s.w,s.h,true);
     if(!p) return;
     c.x=p.x; c.y=p.y;
     if(!movePending){ movePending=true; requestAnimationFrame(function(){ movePending=false; push(); }); }
@@ -977,6 +986,7 @@
       el.style.width='calc(100vw - '+ml+' - '+mr+')';
       el.style.height='calc(100vh - '+mt+' - '+mb+')';
     });
+    rectCache.rect=null;
   }
   ['top','bottom','left','right'].forEach(function(k){
     var el=document.getElementById('margin-'+k), v=document.getElementById('margin-'+k+'-v');
@@ -987,6 +997,7 @@
     try{ var sv=localStorage.getItem('macplay-margin-'+k); if(sv!==null){ el.value=sv; v.textContent=sv+'%'; margins[k]=+sv; } }catch(e){}
   });
   applyMargins();
+  window.addEventListener('resize',function(){ rectCache.rect=null; });
 
   /* ============ focus mode ============ */
   focusbtn.addEventListener('click',function(e){
