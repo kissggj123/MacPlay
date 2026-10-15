@@ -137,7 +137,7 @@
 <img id="v" alt="" draggable="false">
 <canvas id="c"></canvas>
 <div id="hud"></div>
-<div id="banner"><span class="bdot"></span>连接已断开 · 重连中</div>
+<div id="banner"><span class="bdot"></span><span id="btxt">连接已断开 · 重连中</span></div>
 <div id="hint">触摸屏幕操作 CarPlay · 双击呼出/隐藏控制</div>
 <button id="mutebtn" class="cbtn" title="静音/取消静音">
   <svg class="ic-on" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 6a9 9 0 0 1 0 12"/></svg>
@@ -535,6 +535,7 @@
   }
 
   var videoCodec='h264', ts=0; // codec set from server's first text message
+  var videoAttempts=0;
 
   // Spec (2026-10-15 round 2): decode-paced drawing makes recovery look like
   // fast-forward. Keep only the newest frame and paint on rAF instead.
@@ -581,6 +582,7 @@
     var proto=location.protocol==='https:'?'wss':'ws';
     h264ws=new WebSocket(proto+'://'+location.host+'/h264');
     h264ws.binaryType='arraybuffer';
+    h264ws.onopen=function(){ videoAttempts=0; };
     // Fork: poll /health for codec changes (server doesn't push to existing clients)
     setInterval(function(){
       try{
@@ -648,7 +650,7 @@
       }
       updateHud('WebCodecs '+(videoCodec==='h265'?'H.265':'H.264'));
     };
-    h264ws.onclose=function(){ setTimeout(startWebCodecs,2000); };
+    h264ws.onclose=function(){ videoAttempts++; var delay=Math.min(10000,2000*videoAttempts*videoAttempts); setTimeout(startWebCodecs,delay); };
     h264ws.onerror=function(){ try{h264ws.close();}catch(e){} };
   }
 
@@ -854,12 +856,41 @@
 
   /* ============ websocket ============ */
   function send(obj){ if(wsReady) ws.send(JSON.stringify(obj)); }
+  // Spec: lazy toast, same inline-style approach as tapHint. Used by reconnect.
+  var toastEl=null;
+  function showToast(msg){
+    if(!toastEl){
+      toastEl=document.createElement('div');
+      toastEl.style.cssText='position:fixed;bottom:72px;left:50%;transform:translateX(-50%) translateY(8px);z-index:16;background:rgba(30,30,34,.88);color:#fff;padding:8px 18px;border-radius:20px;font-size:14px;pointer-events:none;opacity:0;transition:opacity .3s,transform .3s;box-shadow:0 4px 16px rgba(0,0,0,.12);';
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent=msg;
+    toastEl.style.opacity='1'; toastEl.style.transform='translateX(-50%) translateY(0)';
+    clearTimeout(showToast._t);
+    showToast._t=setTimeout(function(){ toastEl.style.opacity='0'; toastEl.style.transform='translateX(-50%) translateY(8px)'; },2000);
+  }
+  // Spec: exponential backoff 2s→5s→10s cap; kick on foreground/online.
+  var touchAttempts=0, touchTimer=null;
+  function scheduleReconnect(){
+    if(touchTimer) return;
+    touchAttempts++;
+    var btxt=document.getElementById('btxt');
+    if(btxt) btxt.textContent='连接已断开 · 正在重连…（第'+touchAttempts+'次）';
+    var delay=Math.min(10000,2000*Math.pow(2.5,touchAttempts-1));
+    touchTimer=setTimeout(function(){ touchTimer=null; if(!wsReady) connect(); },delay);
+  }
+  function resetBanner(){
+    touchAttempts=0;
+    if(touchTimer){ clearTimeout(touchTimer); touchTimer=null; }
+    if(banner) banner.classList.remove('show');
+    showToast('已重新连接');
+  }
   function connect(){
     var proto=location.protocol==='https:'?'wss':'ws';
     ws=new WebSocket(proto+'://'+location.host+'/touch');
     ws.binaryType='arraybuffer';
-    ws.onopen=function(){ wsReady=true; if(banner) banner.classList.remove('show'); };
-    ws.onclose=function(){ wsReady=false; if(banner) banner.classList.add('show'); setTimeout(connect,2000); };
+    ws.onopen=function(){ wsReady=true; resetBanner(); };
+    ws.onclose=function(){ wsReady=false; if(banner) banner.classList.add('show'); scheduleReconnect(); };
     ws.onerror=function(){ try{ws.close();}catch(e){} };
     ws.onmessage=function(ev){
       if(typeof ev.data!=='string'){ playAudioPacket(ev.data); return; }
@@ -868,6 +899,17 @@
     };
   }
   connect();
+  // Spec: back to foreground or network back → reconnect immediately, reset backoff.
+  function kickReconnect(){
+    if(!wsReady&&(!ws||ws.readyState>=2)){
+      touchAttempts=0;
+      if(touchTimer){ clearTimeout(touchTimer); touchTimer=null; }
+      connect();
+    }
+    if(useWebCodecs&&h264ws&&h264ws.readyState>=2){ videoAttempts=0; startWebCodecs(); }
+  }
+  document.addEventListener('visibilitychange',function(){ if(!document.hidden) kickReconnect(); });
+  window.addEventListener('online',kickReconnect);
   setInterval(function(){ send({t:'ping'}); },20000);
 
   /* ============ touch ============ */
