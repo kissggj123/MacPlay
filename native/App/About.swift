@@ -144,18 +144,59 @@ struct GitHubRelease: Decodable {
     }
 }
 
+// About tab hero: app icon + rainbow version pill on a light gradient card.
+struct AboutHeroCard: View {
+    @ObservedObject var updates: MacPlayUpdates
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            VStack(alignment: .leading, spacing: 5) {
+                Text("NIO Play").font(.system(size: 20, weight: .bold))
+                HStack(spacing: 8) {
+                    Text("v\(updates.currentVersion)")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(LinearGradient.rainbow))
+                    Text("\(updates.build) · \(updates.architecture)").font(.caption).foregroundStyle(.secondary)
+                }
+                Text(L("将 Mac 变成 CarPlay 接收器，串流到车机浏览器显示和操作"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(LinearGradient.rainbowSoft))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.06)))
+    }
+}
+
 struct MacPlayAboutView: View {
     @ObservedObject var model: PlayModel
     @ObservedObject var updates: MacPlayUpdates
     var body: some View {
-        Section(L("关于")) {
-            LabeledContent("NIO Play", value: updates.currentVersion)
-            LabeledContent(L("构建版本"), value: updates.build)
-            LabeledContent(L("运行架构"), value: updates.architecture)
+        Section {
+            AboutHeroCard(updates: updates)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top:4,leading:16,bottom:4,trailing:16))
+        }
+        Section(L("外观")) {
+            Picker(L("外观"),selection:Binding(get:{model.settings.appearance ?? "system"},set:{
+                model.settings.appearance=$0=="system" ? nil : $0;model.persistPreferences()
+            })) {
+                Text(L("跟随系统")).tag("system")
+                Text(L("浅色")).tag("light")
+                Text(L("深色")).tag("dark")
+            }.pickerStyle(.segmented)
+        }
+        Section(L("信息")) {
             LabeledContent(L("设备 ID"), value: model.settings.bluetoothMAC.isEmpty ? "—" : model.settings.bluetoothMAC)
             LabeledContent(L("开源许可"), value: "GPL-3.0-or-later")
             Link(L("项目主页"), destination: URL(string: "https://github.com/kissggj123/NIOPlay")!)
-            Text(L("将 Mac 变成 CarPlay 接收器，串流到车机浏览器显示和操作")).font(.callout).foregroundStyle(.secondary)
         }
         Section(L("车机浏览器功能")) {
             Text(L("• 无头模式：画面仅通过浏览器串流")).font(.callout)

@@ -116,6 +116,8 @@ func receiverBinaryPath() -> String? {
 
 struct PlaySettings: Codable {
     var language: String? = nil
+    // Fork: manual appearance override — "light"/"dark", nil = follow system.
+    var appearance: String? = nil
     var autoReconnect: Bool? = nil
     var autoStartUSB: Bool? = nil
     var backgroundEnabled: Bool? = nil
@@ -1008,6 +1010,10 @@ struct SettingsView: View {
     @ObservedObject var model:PlayModel
     @StateObject private var updates=MacPlayUpdates()
     @State private var showLogConsole = false
+    // Manual appearance override from the About tab (nil = follow system).
+    private var appearanceScheme: ColorScheme? {
+        switch model.settings.appearance { case "light": return .light; case "dark": return .dark; default: return nil }
+    }
     var body:some View {
         VStack(spacing:0) {
             SettingsTabStrip(selection:$model.page)
@@ -1251,6 +1257,7 @@ struct SettingsView: View {
                 }
         }
         .frame(minWidth:520,minHeight:480)
+        .preferredColorScheme(appearanceScheme)
         .environment(\.locale,Locale(identifier:MacPlayLocalization.effectiveLanguage))
         .onChange(of:model.settings.ssid){_,_ in model.passwordStatus=""}
         .onAppear{updates.startAutomaticChecks()}

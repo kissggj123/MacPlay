@@ -295,6 +295,10 @@ enum MacPlayLocalization {
         "设备 ID": ("裝置 ID", "Device ID"),
         "分辨率与帧率修改后需点击「应用并重新连接」生效。": ("解析度與影格率修改後需點擊「套用並重新連線」生效。", "Resolution and frame rate changes take effect after clicking “Apply and Reconnect”."),
         "UI 缩放与安全边距在车机浏览器设置面板（⚙️ → 显示）中调整。": ("UI 縮放與安全邊距在車機瀏覽器設定面板（⚙️ → 顯示）中調整。", "UI scale and safe margins are adjusted in the car browser settings panel (⚙️ → Display)."),
+        "外观": ("外觀", "Appearance"),
+        "浅色": ("淺色", "Light"),
+        "深色": ("深色", "Dark"),
+        "信息": ("資訊", "Info"),
     ]
 
     private static let patterns: [(NSRegularExpression, String, String)] = [
