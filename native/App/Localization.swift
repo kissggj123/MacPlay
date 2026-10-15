@@ -299,6 +299,12 @@ enum MacPlayLocalization {
         "浅色": ("淺色", "Light"),
         "深色": ("深色", "Dark"),
         "信息": ("資訊", "Info"),
+        // Menu bar enhancement (2026-10): status line / launch-at-login / copy address.
+        "● 接收中": ("● 接收中", "● Receiving"),
+        "○ 未连接": ("○ 未連線", "○ Not Connected"),
+        "登录时启动": ("登入時啟動", "Launch at Login"),
+        "复制车机地址": ("複製車機位址", "Copy Car Browser Address"),
+        "登录项注册失败": ("登入項註冊失敗", "Could not register login item"),
     ]
 
     private static let patterns: [(NSRegularExpression, String, String)] = [
@@ -310,6 +316,7 @@ enum MacPlayLocalization {
         (try! NSRegularExpression(pattern: "^(\\d+)fps协商未启动视频，改用(\\d+)fps重连$"), "$1fps協商未啟動影片，改用$2fps重新連線", "Video did not start after $1fps negotiation. Reconnecting at $2fps"),
         (try! NSRegularExpression(pattern: "^(内建显示器|外接显示器) · (\\d+)×(\\d+)像素 · (\\d+)Hz · (\\d+)×(\\d+)mm$"), "$1 · $2×$3像素 · $4Hz · $5×$6mm", "$1 · $2×$3 pixels · $4Hz · $5×$6mm"),
         (try! NSRegularExpression(pattern: "^会话 (\\d+) 分钟$"), "工作階段 $1 分鐘", "Session $1 min"),
+        (try! NSRegularExpression(pattern: "^● 接收中 · (\\d+)分钟$"), "● 接收中 · $1分鐘", "● Receiving · $1 min"),
     ]
 }
 
