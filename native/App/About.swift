@@ -175,9 +175,91 @@ struct AboutHeroCard: View {
     }
 }
 
+// Bundled-component self check: verifies every packaged runtime piece exists
+// and that the GStreamer plugin registry actually loads the critical elements.
+struct ComponentCheck: Identifiable {
+    let id: String
+    let nameKey: String
+    var ok: Bool
+    var detail: String
+}
+
+@MainActor final class MacPlayDiagnostics: ObservableObject {
+    @Published var checks: [ComponentCheck] = []
+    @Published var running = false
+
+    private var res: URL { Bundle.main.resourceURL ?? Bundle.main.bundleURL }
+
+    private func exists(_ relativePath: String, executable: Bool = false) -> Bool {
+        let url = res.appendingPathComponent(relativePath)
+        let fm = FileManager.default
+        return executable ? fm.isExecutableFile(atPath: url.path) : fm.fileExists(atPath: url.path)
+    }
+
+    private func firstNode(of module: String) -> String? {
+        let dir = res.appendingPathComponent("engine/node_modules/\(module)/build/Release")
+        return (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?
+            .first { $0.hasSuffix(".node") }
+    }
+
+    func run() {
+        guard !running else { return }
+        running = true
+        Task {
+            var results: [ComponentCheck] = []
+            @MainActor func add(_ id: String, _ nameKey: String, _ ok: Bool, _ detail: String = "") {
+                results.append(ComponentCheck(id: id, nameKey: nameKey, ok: ok, detail: detail))
+                checks = results
+            }
+            add("receiver", "接收端 Node", exists("runtime/MacPlayReceiver.app/Contents/MacOS/MacPlayReceiver", executable: true))
+            add("engine", "引擎脚本", exists("engine/main.js"))
+            let crypto = firstNode(of: "livi-crypto")
+            add("crypto", "加密模块", crypto != nil, crypto ?? "")
+            let video = firstNode(of: "livi-gst-video")
+            add("video", "视频引擎", video != nil, video ?? "")
+            add("helperd", "辅助进程", exists("driver/livi-helperd", executable: true))
+            add("bluetooth", "蓝牙驱动", exists("driver/macplay-bluetooth", executable: true))
+            add("auth", "认证文件", exists("authentication/identity.pk8") && exists("authentication/certificate.p7b"))
+            let gstVersion = ((try? String(contentsOf: res.appendingPathComponent("gstreamer/macos-arm64/version.txt"), encoding: .utf8)) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            add("gst", "GStreamer 运行时", exists("gstreamer/macos-arm64/lib/libgstreamer-1.0.0.dylib"), gstVersion)
+            // Dynamic: the bundled plugin registry must actually load these.
+            add("hwdec", "硬件解码（VideoToolbox）", await inspect("vtdec"))
+            add("avdec", "libav 兜底解码", await inspect("avdec_h264"))
+            add("webrtc", "WebRTC 直通", await inspect("webrtcbin"))
+            running = false
+        }
+    }
+
+    // Runs the bundled gst-inspect against one element with the same env the
+    // engine uses; exit 0 means the plugin registry resolved it end to end.
+    private func inspect(_ element: String) async -> Bool {
+        let root = res.appendingPathComponent("gstreamer/macos-arm64")
+        let bin = root.appendingPathComponent("bin/gst-inspect-1.0")
+        guard FileManager.default.isExecutableFile(atPath: bin.path) else { return false }
+        let process = Process()
+        process.executableURL = bin
+        process.arguments = [element]
+        process.environment = [
+            "DYLD_LIBRARY_PATH": root.appendingPathComponent("lib").path,
+            "GST_PLUGIN_PATH": root.appendingPathComponent("lib/gstreamer-1.0").path,
+            "GST_PLUGIN_SCANNER": root.appendingPathComponent("libexec/gstreamer-1.0/gst-plugin-scanner").path,
+            "HOME": NSHomeDirectory(),
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return false }
+        let deadline = Date().addingTimeInterval(8)
+        while process.isRunning && Date() < deadline { try? await Task.sleep(nanoseconds: 50_000_000) }
+        if process.isRunning { process.terminate(); return false }
+        return process.terminationStatus == 0
+    }
+}
+
 struct MacPlayAboutView: View {
     @ObservedObject var model: PlayModel
     @ObservedObject var updates: MacPlayUpdates
+    @StateObject private var diagnostics = MacPlayDiagnostics()
     var body: some View {
         Section {
             AboutHeroCard(updates: updates)
@@ -197,6 +279,30 @@ struct MacPlayAboutView: View {
             LabeledContent(L("设备 ID"), value: model.settings.bluetoothMAC.isEmpty ? "—" : model.settings.bluetoothMAC)
             LabeledContent(L("开源许可"), value: "GPL-3.0-or-later")
             Link(L("项目主页"), destination: URL(string: "https://github.com/kissggj123/NIOPlay")!)
+        }
+        Section(L("组件自检")) {
+            HStack {
+                Button(L(diagnostics.running ? "正在自检…" : "执行自检")) { diagnostics.run() }
+                    .disabled(diagnostics.running)
+                Spacer()
+                if !diagnostics.checks.isEmpty {
+                    let broken = diagnostics.checks.filter { !$0.ok }.count
+                    Text(broken == 0 ? L("全部组件正常") : L("部分组件缺失"))
+                        .font(.callout)
+                        .foregroundStyle(broken == 0 ? Color.green : Color.orange)
+                }
+            }
+            ForEach(diagnostics.checks) { check in
+                HStack(spacing: 8) {
+                    Image(systemName: check.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                        .foregroundStyle(check.ok ? Color.green : Color.red)
+                    Text(L(check.nameKey))
+                    Spacer()
+                    if !check.detail.isEmpty {
+                        Text(check.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+            }
         }
         Section(L("车机浏览器功能")) {
             Text(L("• 无头模式：画面仅通过浏览器串流")).font(.callout)
