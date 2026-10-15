@@ -919,7 +919,15 @@
     ws.onmessage=function(ev){
       if(typeof ev.data!=='string'){ playAudioPacket(ev.data); return; }
       // Fork: answer the server's dead-connection probe.
-      try{ var m=JSON.parse(ev.data); if(m&&m.t==='ping'){ send({t:'pong'}); return; } if(m&&m.t==='displayProbe'){ probeAnswered=!!m.switchable; return; } }catch(e){}
+      try{ var m=JSON.parse(ev.data);
+        if(m&&m.t==='ping'){ send({t:'pong'}); return; }
+        if(m&&m.t==='pong'&&pingSentAt){
+          var r=Date.now()-pingSentAt; pingSentAt=0;
+          rttSamples.push(r); if(rttSamples.length>5) rttSamples.shift();
+          rttMs=Math.round(rttSamples.reduce(function(a,b){return a+b;},0)/rttSamples.length);
+          return;
+        }
+        if(m&&m.t==='displayProbe'){ probeAnswered=!!m.switchable; return; } }catch(e){}
     };
   }
   connect();
@@ -934,7 +942,8 @@
   }
   document.addEventListener('visibilitychange',function(){ if(!document.hidden) kickReconnect(); });
   window.addEventListener('online',kickReconnect);
-  setInterval(function(){ send({t:'ping'}); },20000);
+  var pingSentAt=0, rttSamples=[];
+  setInterval(function(){ if(wsReady){ pingSentAt=Date.now(); send({t:'ping'}); } },20000);
 
   /* ============ touch ============ */
   function mapPoint(clientX,clientY,rect,width,height,clamp){
