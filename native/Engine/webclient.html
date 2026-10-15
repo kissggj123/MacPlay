@@ -580,6 +580,15 @@
       pcm:new Int16Array(buffer,20) };
   }
   var audioStreams=new Map(), audioNodes=new Set();
+  // WheelPlay-style adaptive jitter buffer: a fixed lead time either crackles
+  // (bursts overrun it) or wastes latency. Per-stream target grows when
+  // playback underruns and creeps back down while playback stays healthy.
+  var jitterTargets={};
+  function jitterFor(stream){
+    var j=jitterTargets[stream];
+    if(!j) j=jitterTargets[stream]={target:0.35,healthySince:0};
+    return j;
+  }
   function playAudioPacket(buffer){
     if(muted) return;
     // retry the gesture unlock as packets arrive; drop audio while suspended
@@ -587,17 +596,14 @@
     if(!audioRunning){ ensureAudio(); showTapHint(); return; }
     var frame=decodeAudioPacket(buffer); if(!frame) return;
     var now=audioCtx.currentTime;
-    // Fork: 0.5s jitter buffer for media (was 0.3s) — the PCM frames cross a
-    // WS/TCP hop with bursty arrival; a tight buffer makes every burst overrun
-    // maxAhead and get dropped (嘎达嘎啦 crackle). Scheduling further ahead and
-    // allowing a deeper backlog trades ~0.4s latency for clean audio.
-    var delay=frame.media?0.5:0.06, maxAhead=frame.media?delay+1.5:0.25;
+    var j=frame.media?jitterFor(frame.stream):null;
+    var delay=j?j.target:0.06, maxAhead=frame.media?delay+1.65:0.25;
     var next=audioStreams.get(frame.stream);
     if(next===undefined) next=now+delay;
     if(next<now){
-      // Fork: don't hard-stop playing nodes — that's an audible click. Let
-      // them finish naturally (≤ one buffer of overlap is inaudible) and just
-      // resume scheduling slightly ahead of "now".
+      // Underrun — deepen this stream's buffer instead of always losing
+      // audio at the same point; also don't hard-stop playing nodes (click).
+      if(j){ j.target=Math.min(1,j.target+0.1); j.healthySince=now; }
       next=now+0.02;
     }
     if(next-now>maxAhead||audioNodes.size>=256) return;
@@ -613,6 +619,8 @@
     node.onended=function(){ audioNodes.delete(node); node.disconnect(); };
     node.start(next);
     audioStreams.set(frame.stream,next+count/frame.rate);
+    // 20s without an underrun → reclaim 20ms of latency, floor 0.3s.
+    if(j&&now-j.healthySince>20&&j.target>0.3){ j.target=Math.max(0.3,j.target-0.02); j.healthySince=now; }
   }
   mutebtn.addEventListener('click',function(e){
     e.stopPropagation(); muted=!muted; mutebtn.textContent=muted?'🔇':'🔊';
@@ -829,7 +837,13 @@
     var saved=null;
     try{ saved=JSON.parse(localStorage.getItem('nioDisplay')||'null'); }catch(e){}
     var w,h;
-    if(saved&&saved.w>0){ w=saved.w; h=saved.h; } else { w=1920; h=1080; }
+    if(saved&&saved.w>0){ w=saved.w; h=saved.h; }
+    else if(/Android/i.test(navigator.userAgent)){
+      // Head-unit browsers (Android WebView): use the real panel resolution,
+      // not a desktop-style default — a 2.5K car screen should negotiate 2.5K.
+      w=Math.round(screen.width*dpr); h=Math.round(screen.height*dpr);
+    }
+    else { w=1920; h=1080; }
     if(saved&&(Math.abs(cw-saved.w)/saved.w>0.15||Math.abs(ch-saved.h)/saved.h>0.15)){ w=cw; h=ch; }
     sentFit=true;
     try{ localStorage.setItem('nioDisplay',JSON.stringify({w:w,h:h})); }catch(e){}
