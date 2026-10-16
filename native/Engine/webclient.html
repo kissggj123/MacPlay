@@ -291,6 +291,7 @@
     if(audioOverflows>0) stats+='  溢出'+audioOverflows;
     if(missingFrames>0) stats+='  缺帧'+missingFrames;
     if(audioSplices>0) stats+='  接缝'+audioSplices;
+    if(audioCtx) stats+='  ctx'+Math.round(audioCtx.sampleRate/100)/10+'k';
     hud.textContent=mode+'\n'+fps+' fps  '+kbps+' kbps'+stats+(extra?'\n'+extra:'');
     if(dt>=1){ frameCount=0; bytesCount=0; lastStatTime=now; }
   }
@@ -911,14 +912,14 @@
       pcm:new Int16Array(buffer,20) };
   }
   var audioStreams=new Map(), audioNodes=new Set();
-  // Fork: AudioWorklet ring-buffer player for 48 kHz streams. BufferSource
-  // scheduling lives on the main thread — a WebKit main-thread stall (HUD DOM
-  // updates, touch, video canvas) pushes `next` stale and the chain underruns
-  // (audible click, more likely with the HUD on or while the iPhone renders
-  // its UI). The worklet pulls on the audio render thread instead: the main
-  // thread only shovels decoded PCM into its ring; stalls just deepen the
-  // buffer, never gap it. Non-48k streams (some call/nav rates) keep the
-  // BufferSource fallback below.
+  // Fork: AudioWorklet ring-buffer player. BufferSource scheduling lives on the
+  // main thread — a WebKit main-thread stall (HUD DOM updates, touch, video
+  // canvas) pushes `next` stale and the chain underruns (audible click, more
+  // likely with the HUD on or while the iPhone renders its UI). The worklet
+  // pulls on the audio render thread instead: the main thread only shovels
+  // decoded PCM into its ring; stalls just deepen the buffer, never gap it.
+  // The BufferSource path below stays only as fallback for browsers where
+  // audioWorklet fails to load.
   var workletReady=false, workletLoading=false, streamPlayers={};
   var WORKLET_SRC=[
     'class NioPlayer extends AudioWorkletProcessor{',
@@ -963,6 +964,51 @@
     audioCtx.audioWorklet.addModule(url).then(function(){ workletReady=true; })
       .catch(function(){ workletReady=false; });
   }
+  // Fork (sizzle fix): a 44.1 kHz AudioContext (Safari on built-in speakers,
+  // typical desktop setup) used to fall back to BufferSource, where WebKit
+  // resamples every 20 ms AudioBuffer independently — the resampler restarts
+  // with zero history at each block edge, a periodic amplitude-scaled
+  // transient: the light sizzle audible only in dense passages. Stream-
+  // resample 48k→ctx rate ONCE instead, with a 16-tap Hann-windowed sinc
+  // whose history carries across blocks, and feed the same worklet ring.
+  var RS_TAB=(function(){
+    var PH=1024,t=new Float32Array(PH*16);
+    for(var p=0;p<PH;p++){
+      var f=p/PH;
+      for(var k=0;k<16;k++){
+        var x=k-7-f,w=0;   // taps span (-8,8)
+        if(x>-8&&x<8)
+          w=(Math.abs(x)<1e-9?1:Math.sin(Math.PI*x)/(Math.PI*x))*(0.5+0.5*Math.cos(Math.PI*x/8));
+        t[p*16+k]=w;
+      }
+    }
+    return t;
+  })();
+  var rsStates=new Map();
+  function resampleFrame(stream,f32,src,dst){
+    if(src===dst) return f32;
+    var st=rsStates.get(stream);
+    if(!st||st.dst!==dst)
+      st=rsStates.set(stream,{pos:8,hL:new Float32Array(16),hR:new Float32Array(16),dst:dst,init:false}).get(stream);
+    var nIn=(f32.length/2)|0, len=16+nIn;
+    var BL=new Float32Array(len), BR=new Float32Array(len);
+    BL.set(st.hL); BR.set(st.hR);
+    for(var i=0;i<nIn;i++){ BL[16+i]=f32[i*2]; BR[16+i]=f32[i*2+1]; }
+    if(!st.init){ st.init=true; var v0=BL[16];
+      for(var z=0;z<16;z++){ BL[z]=v0; BR[z]=BR[16]; } }
+    var step=src/dst, remain=len-8-st.pos;
+    if(remain<=0) return new Float32Array(0);
+    var outN=Math.ceil(remain/step), out=new Float32Array(outN*2), q=st.pos;
+    for(var m=0;m<outN;m++){
+      var idx=Math.floor(q), ph=((q-idx)*1024)|0, base=ph*16, l=0, r=0;
+      for(var t2=0;t2<16;t2++){
+        var w=RS_TAB[base+t2]; l+=w*BL[idx-7+t2]; r+=w*BR[idx-7+t2];
+      }
+      out[m*2]=l; out[m*2+1]=r; q+=step;
+    }
+    st.hL=BL.slice(len-16); st.hR=BR.slice(len-16); st.pos=q-(len-16);
+    return out;
+  }
   function playViaWorklet(frame,kind,j,now){
     var p=streamPlayers[frame.stream];
     if(!p){
@@ -990,8 +1036,9 @@
     var ch=frame.channels,n=(frame.pcm.length/ch)|0,f32=new Float32Array(n*2);
     for(var i=0;i<n;i++){
       f32[i*2]=frame.pcm[i*ch]/32768;
-      f32[i*2+1]=(ch>1?frame.pcm[i*ch+1]:frame.pcm[i*ch])/32768;
+      f32[i*2+1]=(ch>1?frame.pcm[i*ch+1]:frame.pcm])/32768;
     }
+    if(frame.rate!==audioCtx.sampleRate) f32=resampleFrame(frame.stream,f32,frame.rate,audioCtx.sampleRate);
     p.node.port.postMessage({t:'pcm',pcm:f32},[f32.buffer]);
     // 20s without an underrun → reclaim 20ms of latency, back to per-kind floor.
     if(now-j.healthySince>20&&j.target>j.floor){
@@ -1045,7 +1092,7 @@
     var kind=streamKind(frame.stream);
     var j=jitterFor(frame.stream,kind);
     var now=audioCtx.currentTime;
-    if(workletReady&&frame.rate===audioCtx.sampleRate){ playViaWorklet(frame,kind,j,now); return; }
+    if(workletReady){ playViaWorklet(frame,kind,j,now); return; }
     var delay=j.target, maxAhead=kind==='media'?delay+1.65:Math.max(0.25,delay+0.15);
     var next=audioStreams.get(frame.stream);
     if(next===undefined) next=now+delay;
