@@ -123,6 +123,7 @@ const server=net.createServer(socket=>{
   try{
    const cur=JSON.parse(fs.readFileSync(settingsFile,'utf8'))
    cur.width=cfg.width;cur.height=cfg.height;cur.fps=cfg.fps;cur.webCodec=cfg.codec
+   cur.resolution='custom' // keep the Mac app's preset picker from clobbering it
    fs.writeFileSync(settingsFile, JSON.stringify(cur,null,2))
   }catch(e){console.error('[engine] persist display settings failed:',(e as Error).message)}
   if(wired)return false

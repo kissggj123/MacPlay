@@ -27,3 +27,15 @@ test('pixel rounding and unsupported frame rate fallback',()=>{
 });
 
 test('high frame rate requests are reported unchanged',()=>{for(const fps of [90,120])assert.equal(config({fps}).fps,fps)});
+
+test('manual physical width override keeps px/mm ratio consistent',()=>{
+ const d=config({widthMmOverride:200});
+ assert.equal(d.widthPhysicalMm,200);
+ assert.equal(d.heightPhysicalMm,Math.round(200*1080/1920));
+ const d2=config({width:2560,height:1440,widthMmOverride:250});
+ assert.equal(d2.widthPhysicalMm,250);
+ assert.equal(d2.heightPhysicalMm,Math.round(250*1440/2560));
+});
+test('override skips Mac panel measurements entirely',()=>{
+ assert.doesNotThrow(()=>displayConfig({width:2560,height:1440,fps:60,screenPixelWidth:NaN,screenPixelHeight:NaN,screenWidthMm:0,screenHeightMm:0,widthMmOverride:200}));
+});
