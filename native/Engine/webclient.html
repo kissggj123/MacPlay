@@ -1036,7 +1036,7 @@
     var ch=frame.channels,n=(frame.pcm.length/ch)|0,f32=new Float32Array(n*2);
     for(var i=0;i<n;i++){
       f32[i*2]=frame.pcm[i*ch]/32768;
-      f32[i*2+1]=(ch>1?frame.pcm[i*ch+1]:frame.pcm])/32768;
+      f32[i*2+1]=(ch>1?frame.pcm[i*ch+1]:frame.pcm[i*ch])/32768;
     }
     if(frame.rate!==audioCtx.sampleRate) f32=resampleFrame(frame.stream,f32,frame.rate,audioCtx.sampleRate);
     p.node.port.postMessage({t:'pcm',pcm:f32},[f32.buffer]);
