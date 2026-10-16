@@ -320,6 +320,12 @@ enum MacPlayLocalization {
         "登录时启动": ("登入時啟動", "Launch at Login"),
         "复制车机地址": ("複製車機位址", "Copy Car Browser Address"),
         "登录项注册失败": ("登入項註冊失敗", "Could not register login item"),
+        // USB re-enumeration bounce (2026-10): cellular toggle / low-power-mode flip.
+        "iPhone已恢复": ("iPhone已恢復", "iPhone Restored"),
+        "等待CarPlay自动重连": ("等待CarPlay自動重連", "Waiting for CarPlay to reconnect"),
+        "USB重新枚举中": ("USB重新枚舉中", "USB Re-enumerating"),
+        "等待iPhone恢复连接…": ("等待iPhone恢復連線…", "Waiting for iPhone to reconnect…"),
+        "USB重新枚举中，等待iPhone恢复连接": ("USB重新枚舉中，等待iPhone恢復連線", "USB re-enumerating, waiting for iPhone to reconnect"),
         // Car browser addressing (2026-10): mDNS hostname entry + private-subnet hint.
         "mDNS 主机名（车机需支持 .local 解析，可绕过私网 IP 拦截）": ("mDNS 主機名（車機需支援 .local 解析，可繞過私網 IP 攔截）", "mDNS hostname (car browser must resolve .local; bypasses private-IP blocks)"),
         ".local 主机名通过 mDNS 在局域网内解析；车机浏览器拦截私网 IP 字面量时可用它打开页面，页面内的触控/音频/HTTPS 会自动跟随主机名。车机需支持 mDNS 解析。": (".local 主機名透過 mDNS 在區網內解析；車機瀏覽器攔截私網 IP 字面量時可用它開啟頁面，頁面內的觸控/音訊/HTTPS 會自動跟隨主機名。車機需支援 mDNS 解析。", "The .local hostname resolves on the LAN via mDNS. When the car browser blocks private-range IP literals, open the page through it — touch, audio and HTTPS inside the page follow the hostname automatically. The car browser must support mDNS resolution."),

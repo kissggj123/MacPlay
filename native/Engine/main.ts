@@ -47,6 +47,13 @@ const config={deviceName:'NIO Play',deviceId:accessoryDeviceId(identity.pubRaw),
 const sessions=new Set<CpStack>()
 let active: CpStack|undefined
 let wiredReady=false
+// Fork: toggling cellular data or flipping low-power-mode re-enumerates the
+// iPhone's USB composite device — usbmuxd reports "unplugged" even though the
+// phone re-attaches within ~100ms and CarPlay re-establishes on its own
+// (carkit up → iAP2 → session in ~3s). Shutting down on that line killed the
+// receiver for a bounce the user never caused. Treat the unplug as final only
+// if the device does NOT return within this grace window.
+let wiredReplugTimer:ReturnType<typeof setTimeout>|undefined
 let videoReady=false
 let sessionReady=false
 let phoneInfo: {name:string;deviceId:string}|undefined
@@ -70,12 +77,18 @@ for(const stream of [helper.stdout,helper.stderr]) readline.createInterface({inp
  if(!videoReady && /failed|unavailable|error|refused|needs the shared/i.test(line) && !line.includes('iAP2 already runs over USB carkit')) log('连接需要检查',line)
  if(!videoReady && line.includes('MFi auth succeeded')) log('配件认证已通过','正在协商CarPlay连接')
  if(!videoReady && line.includes('CarPlayStartSession sent')) {handoffStarted=true;discovery?.announce();diagnostic('network-handoff-started');frameRateGuard.negotiationStarted();armDeadline();log('已发送连接参数','等待iPhone连接接收端')}
- if(line.includes('usbmuxd carkit up')) {wiredReady=true;armStartupDeadline();usb('USB通信已建立，正在识别配件')}
+ if(line.includes('usbmuxd carkit up')) {if(wiredReplugTimer){clearTimeout(wiredReplugTimer);wiredReplugTimer=undefined;log('iPhone已恢复','等待CarPlay自动重连')}wiredReady=true;armStartupDeadline();usb('USB通信已建立，正在识别配件')}
  if(line.includes('wired: identification accepted')) usb('iPhone已接受配件识别')
  if(line.includes('wired: MFi auth succeeded')) usb('配件认证已通过，正在建立CarPlay会话')
  if(line.includes('wired: CarPlayStartSession sent')) usb('已发送CarPlay连接参数')
  if(line.includes('usbmuxd carkit failed')) usb('USB通信失败','无法打开iPhone的CarPlay服务，请解锁并确认信任后重新连接。')
- if(line.includes('unplugged')) {const hadWired=wiredReady;wiredReady=false;usb('iPhone已拔出');if(!settings.wireless && hadWired && (videoReady||sessionReady)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}
+ if(line.includes('unplugged')) {const hadWired=wiredReady;wiredReady=false;usb('iPhone已拔出');
+  // Fork: cellular/low-power toggles bounce USB for ~100ms — keep the engine
+  // alive for the re-plug; only a device that stays gone stops the receiver.
+  if(!settings.wireless && hadWired && (videoReady||sessionReady)){
+   if(wiredReplugTimer)clearTimeout(wiredReplugTimer)
+   wiredReplugTimer=setTimeout(()=>{wiredReplugTimer=undefined;if(!wiredReady){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}},5000)
+  }}
 })
 helper.on('error',e=>log('连接后端启动失败',e.message))
 helper.on('exit',code=>{if(!stopping){log('连接后端已退出',String(code));process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}})
@@ -143,6 +156,10 @@ const server=net.createServer(socket=>{
   // reconnect — shutting down here killed the receiver mid-use (画面卡死)
   // and pushed audio back to the iPhone speaker.
   if(displayRestartPending&&!stopping&&hadVideo){displayRestartPending=false;log('正在应用新的显示分辨率','等待iPhone重新连接…');if(usbSession)usb('分辨率已更新，等待iPhone自动重连');return}
+  // Fork: a USB re-enumeration bounce (cellular/low-power toggle) tears the
+  // session down but the phone re-attaches within the unplug grace window —
+  // hold the receiver open and let carkit up re-arm it, like displayRestart.
+  if(wiredReplugTimer&&!stopping&&hadVideo){log('USB重新枚举中','等待iPhone恢复连接…');if(usbSession)usb('USB重新枚举中，等待iPhone恢复连接');return}
   log(disconnectReason,'重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true,reason:disconnectReason})+'\n');shutdown()}}
   if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
  stack.on('host-ui-requested',()=>{process.stdout.write(JSON.stringify({showMain:true})+'\n');diagnostic('show-main')})
