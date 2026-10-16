@@ -301,6 +301,10 @@
     if(missingFrames>0) stats+='  缺帧'+missingFrames;
     if(audioSplices>0) stats+='  接缝'+audioSplices;
     if(audioCtx) stats+='  ctx'+Math.round(audioCtx.sampleRate/100)/10+'k';
+    // Fork: window physical pixels — the head unit's true panel size the stream
+    // should be negotiated to match (black-bar diagnosis: stream aspect vs win).
+    var dpr=window.devicePixelRatio||1;
+    stats+='  窗口'+Math.round(window.innerWidth*dpr)+'×'+Math.round(window.innerHeight*dpr);
     hud.textContent=mode+'\n'+fps+' fps  '+kbps+' kbps'+stats+(extra?'\n'+extra:'');
     if(dt>=1){ frameCount=0; bytesCount=0; lastStatTime=now; }
   }
@@ -1261,7 +1265,10 @@
           rttMs=Math.round(rttSamples.reduce(function(a,b){return a+b;},0)/rttSamples.length);
           return;
         }
-        if(m&&m.t==='displayProbe'){ probeAnswered=!!m.switchable; return; } }catch(e){}
+        if(m&&m.t==='displayProbe'){ probeAnswered=!!m.switchable; return; }
+        if(m&&m.t==='displayResult'){ alert(m.applied
+          ?('显示设置已应用 ('+m.width+'×'+m.height+')，CarPlay 会话将重启协商')
+          :('新分辨率 '+m.width+'×'+m.height+' 已保存。当前为有线连接，不在线切换；请重新启动接收后生效')); return; } }catch(e){}
     };
   }
   connect();
@@ -1439,13 +1446,14 @@
       fps:+(fpsBtn?fpsBtn.dataset.v:60),
       codec:document.getElementById('codec').value,
       uiscale:+document.getElementById('uiscale').value});
-    alert('显示设置已发送，CarPlay 会话将重启以新参数重新协商');
+    // Result reported via displayResult: wired sessions save for the next
+    // receiver start instead of switching live — the old alert here claimed a
+    // renegotiation that never happened on USB.
   });
   document.getElementById('matchwin').addEventListener('click',function(){
     var dpr=window.devicePixelRatio||1;
     var w=Math.round(window.innerWidth*dpr), h=Math.round(window.innerHeight*dpr);
     send({t:'display', width:w, height:h, matchWindow:true});
-    alert('已按本窗口物理像素 ('+w+'×'+h+') 请求重连');
   });
 
   /* ============ auto fit: negotiate once at page load ============ */

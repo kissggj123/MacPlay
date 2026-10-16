@@ -114,15 +114,18 @@ const server=net.createServer(socket=>{
  // and apply them to the live in-memory config so the NEXT session (the phone
  // reconnects after the drop) negotiates the new resolution natively.
  stack.onDisplayChange=cfg=>{
-  // Fork: veto on wired USB — the phone never reconnects after a dropped wired
-  // session, so the renegotiation would stall the receiver (画面卡死). The
-  // browser scales any session resolution, so keep the live stream untouched.
-  if(usbSession){log('有线连接不切换分辨率','保持当前会话，浏览器画面自动缩放显示');return false}
+  // Fork: veto the LIVE switch on wired USB — the phone never reconnects after
+  // a dropped wired session. Still persist the change: the new resolution
+  // applies at the next receiver start ("saved for next time", not a fake
+  // success). Wireless sessions persist AND apply live (the phone returns).
+  const wired=!!usbSession
+  if(wired)log('有线连接不在线切换分辨率','新分辨率已保存，重新启动接收后生效')
   try{
    const cur=JSON.parse(fs.readFileSync(settingsFile,'utf8'))
    cur.width=cfg.width;cur.height=cfg.height;cur.fps=cfg.fps;cur.webCodec=cfg.codec
    fs.writeFileSync(settingsFile, JSON.stringify(cur,null,2))
   }catch(e){console.error('[engine] persist display settings failed:',(e as Error).message)}
+  if(wired)return false
   try{
    settings.width=cfg.width;settings.height=cfg.height;settings.fps=cfg.fps
    config.main=displayConfig(settings)

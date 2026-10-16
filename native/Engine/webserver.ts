@@ -269,6 +269,12 @@ function handleTouchMessage(raw: string, opts: WebServerOpts, sock: net.Socket):
     const stackAny = stack as any
     if (typeof stackAny.setDisplay === 'function') {
       try { stackAny.setDisplay(cfg) } catch { /* ignore */ }
+      // Fork: report how the request landed. Wired sessions veto the live
+      // switch (the phone never reconnects after a dropped USB session) but
+      // the engine persists the change for the next receiver start — the
+      // client shows an honest "saved for next start" instead of assuming a
+      // renegotiation that will never happen.
+      wsSendText(sock, JSON.stringify({ t: 'displayResult', applied: opts.displaySwitchable?.() ?? false, width: cfg.width, height: cfg.height }))
     } else {
       console.error(`[webserver] display config requested ${cfg.width}x${cfg.height}@${cfg.fps} ${cfg.codec}, no setDisplay on stack`)
     }
