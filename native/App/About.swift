@@ -55,7 +55,7 @@ struct GitHubRelease: Decodable {
         }
     }
     private let defaults = UserDefaults.standard
-    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0" }
+    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.1" }
     var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "" }
     var architecture: String {
         #if arch(arm64)

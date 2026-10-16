@@ -3,9 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 TARGET_ARCH="${MACPLAY_ARCH:-$(uname -m)}"
 case "$TARGET_ARCH" in x64) TARGET_ARCH=x86_64;; aarch64) TARGET_ARCH=arm64;; esac
-# Version scheme: 1.3.0.<build>. The build number auto-increments on every
+# Version scheme: 1.3.1.<build>. The build number auto-increments on every
 # package run — each DMG delivery is one revision (8901, 8902, ...).
-APP_VERSION="1.3.0"
+APP_VERSION="1.3.1"
 BUILD_FILE="scripts/BUILD_NUMBER"
 BUILD_NUM=$(( $(cat "$BUILD_FILE") + 1 ))
 echo "$BUILD_NUM" > "$BUILD_FILE"
