@@ -33,7 +33,7 @@ export interface TouchStack {
   setDisplay?(cfg: DisplayConfig): void
 }
 export interface DisplayConfig {
-  width: number; height: number; fps: number
+  width: number; height: number; fps?: number
   codec: string; uiscale: number; matchWindow?: boolean
   /** Fork: advertised physical width in mm, owned by the car browser (the real
    * display). iOS picks its CarPlay layout from physical-size brackets. */
@@ -262,7 +262,9 @@ function handleTouchMessage(raw: string, opts: WebServerOpts, sock: net.Socket):
     const cfg: DisplayConfig = {
       width: Math.max(320, Math.min(3840, Math.round(Number(msg.width) || 1280))),
       height: Math.max(240, Math.min(2160, Math.round(Number(msg.height) || 720))),
-      fps: msg.fps === 30 ? 30 : 60,
+      // Fork: fps only when the browser explicitly picked one — absent means
+      // "keep current" so a window-size report never clobbers the Mac's fps.
+      fps: msg.fps === 30 ? 30 : msg.fps === 60 ? 60 : undefined,
       codec: msg.codec === 'hevc' ? 'hevc'
         : msg.codec === 'h264' ? 'h264'
         : (opts.currentVideoCodec?.() === 'h265' ? 'hevc' : 'h264'),

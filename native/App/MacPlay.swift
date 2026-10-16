@@ -872,9 +872,24 @@ struct PlaySettings: Codable {
             status="当前Wi-Fi与连接配置不一致";detail="请读取当前网络并填写对应密码。";return
         }
         do {
+            let sessionURL=directory.appendingPathComponent("session-settings.json")
+            // Fork: the engine persists browser-negotiated display geometry into the
+            // session file (MACPLAY_SETTINGS_PATH); the car browser owns resolution
+            // and physical width, the Mac only relays. start() rewrites that file
+            // from memory, so adopt the negotiated values from the previous
+            // session's file BEFORE overwriting — otherwise every restart silently
+            // reverts to stale Mac-side values (the "匹配后毫无变化" bug).
+            if let data=try? Data(contentsOf:sessionURL),
+               let prev=try? JSONDecoder().decode(PlaySettings.self,from:data) {
+                if prev.resolution=="custom" {
+                    settings.resolution="custom"
+                    settings.width=prev.width
+                    settings.height=prev.height
+                }
+                settings.widthMmOverride=prev.widthMmOverride
+            }
             try save()
             appliedSettings=settings
-            let sessionURL=directory.appendingPathComponent("session-settings.json")
             try JSONEncoder().encode(settings).write(to:sessionURL,options:.atomic)
             try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:sessionURL.path)
             attemptID=UUID().uuidString.prefix(8).description;attemptStart=Date()
