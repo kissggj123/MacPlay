@@ -43,6 +43,13 @@
     color:var(--txt);border:1px solid var(--line);border-radius:10px;
     font-family:ui-monospace,Menlo,monospace;font-size:11px;padding:7px 10px;line-height:1.5;
     display:none;pointer-events:none;white-space:pre;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  #hudbtn{position:fixed;top:10px;right:10px;z-index:11;background:var(--glass);
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    color:var(--txt);border:1px solid var(--line);border-radius:999px;
+    font-family:-apple-system,sans-serif;font-size:12px;font-weight:600;padding:6px 14px;
+    cursor:pointer;-webkit-user-select:none;user-select:none;box-shadow:0 2px 10px rgba(0,0,0,.12);
+    transition:opacity .2s ease}
+  #hudbtn.off{opacity:.35}
   /* hint bar */
   #hint{position:fixed;left:0;right:0;bottom:0;text-align:center;color:rgba(255,255,255,.5);
     font-family:-apple-system,sans-serif;font-size:12px;padding:12px;pointer-events:none;
@@ -140,6 +147,7 @@
 <canvas id="c"></canvas>
 <video id="rv" autoplay playsinline muted></video>
 <div id="hud"></div>
+<div id="hudbtn">HUD</div>
 <div id="banner"><span class="bdot"></span><span id="btxt">连接已断开 · 重连中</span></div>
 <div id="hint">触摸屏幕操作 CarPlay · 双击呼出/隐藏控制</div>
 <button id="mutebtn" class="cbtn" title="静音/取消静音">
@@ -248,11 +256,28 @@
   var spsPps=null, frameCount=0, bytesCount=0, lastStatTime=Date.now();
   var droppedFrames=0, rttMs=null, audioUnderruns=0;
   var hud=document.getElementById('hud');
+  // Fork: HUD visibility toggle — persisted per device; the stats overlays are
+  // dev-facing and users preferred a clean picture.
+  var hudHidden=false;
+  try{ hudHidden=localStorage.getItem('niohud')==='0'; }catch(e){}
+  var hudBtn=document.getElementById('hudbtn');
+  if(hudBtn){
+    if(hudHidden){ hudBtn.classList.add('off'); hud.style.display='none'; }
+    hudBtn.addEventListener('click',function(e){
+      e.stopPropagation();
+      ensureAudio(); // this click is a valid unlock gesture too
+      hudHidden=!hudHidden;
+      hudBtn.classList.toggle('off',hudHidden);
+      try{ localStorage.setItem('niohud',hudHidden?'0':'1'); }catch(x){}
+      hud.style.display=hudHidden?'none':'block';
+    });
+  }
   // Fork: WebRTC direct passthrough state (H.264, LAN host candidates).
   var rv=document.getElementById('rv');
   var rtcws=null, rtcpc=null, rtcActive=false, rtcStatsTimer=null, rtcStatsSummary='';
 
   function updateHud(mode, extra){
+    if(hudHidden) return;
     hud.style.display='block';
     var now=Date.now(), dt=(now-lastStatTime)/1000;
     var fps=dt>0?(frameCount/dt).toFixed(1):'0';
@@ -753,7 +778,7 @@
       }).catch(function(){});
     },1000);
     setInterval(function(){
-      if(!rtcActive) return;
+      if(!rtcActive||hudHidden) return;
       hud.style.display='block';
       hud.textContent='WebRTC H.264\n'+rtcStatsSummary;
     },1000);
@@ -895,21 +920,31 @@
     ' constructor(o){super();o=(o&&o.processorOptions)||{};',
     '  this.cap=Math.floor(sampleRate*2);this.buf=new Float32Array(this.cap*2);',
     '  this.r=0;this.w=0;this.filled=0;this.depth=0.3;this.running=false;',
-    '  this.underruns=0;this.last=0;',
+    '  this.underruns=0;this.last=0;this.fin=0;this.hl=0;this.hr=0;',
     '  this.port.onmessage=(e)=>{var d=e.data;',
     '   if(d.t==="pcm"){var p=d.pcm,n=(p.length/2)|0;',
     '    for(var i=0;i<n;i++){var w=this.w*2;this.buf[w]=p[i*2];this.buf[w+1]=p[i*2+1];',
     '     this.w=(this.w+1)%this.cap;if(this.filled<this.cap)this.filled++;else this.r=(this.r+1)%this.cap;}',
     '   }else if(d.t==="depth"){this.depth=d.v;}};',
     ' }',
-    ' process(inp,out){var o=out[0],n=o[0].length,c=o.length;',
-    '  if(!this.running&&this.filled>=this.depth*sampleRate)this.running=true;',
+    ' process(inp,out){var o=out[0],n=o[0].length,c=o.length,k;',
+    '  if(!this.running&&this.filled>=this.depth*sampleRate){this.running=true;this.fin=256;}',
     '  if(this.running){',
     '   if(this.filled<n){this.running=false;this.underruns++;',
     '    if(currentTime-this.last>0.5){this.last=currentTime;this.port.postMessage({t:"underrun",n:this.underruns});}}',
-    '   else{for(var i=0;i<n;i++){var r=this.r*2,l=this.buf[r],rr=this.buf[r+1];',
-    '    for(var ch=0;ch<c;ch++)o[ch][i]=ch===0?l:rr;',
-    '    this.r=(this.r+1)%this.cap;this.filled--;}}}',
+    '   else{var fin=this.fin>0?Math.min(this.fin,n):0;this.fin-=fin;',
+    '    for(var i=0;i<n;i++){var r=this.r*2,l=this.buf[r],rr=this.buf[r+1];',
+    '     var g=fin>0&&i<fin?i/fin:1;',
+    '     for(var ch=0;ch<c;ch++)o[ch][i]=(ch===0?l:rr)*g;',
+    '     this.hl=l;this.hr=rr;',
+    '     this.r=(this.r+1)%this.cap;this.filled--;}}}',
+    '  else{',
+    '   // Declick (PLC-lite): a hard cut to zero at an underrun boundary is a',
+    '   // click whose loudness scales with the signal — hold the last sample',
+    '   // and decay it over ~10ms instead. Masked by music, inaudible in quiet.',
+    '   var hl=this.hl,hr=this.hr;',
+    '   for(k=0;k<n;k++){var g=1-k/512;if(g<0)g=0;g*=g;',
+    '    for(var ch2=0;ch2<c;ch2++)o[ch2][k]=(ch2===0?hl:hr)*g;}}',
     '  return true;}',
     '}',
     'registerProcessor("nio-player",NioPlayer);'

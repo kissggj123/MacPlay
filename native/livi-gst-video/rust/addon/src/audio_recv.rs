@@ -20,6 +20,71 @@ struct Sink {
     forwarded: Arc<AtomicU64>,
     rejected: Arc<AtomicU64>,
     on_started: StartedCb,
+    // Fork: amplitude-correlated crackle. A late/reordered RTP packet splices
+    // PCM at the wrong offset and the discontinuity scales with the signal —
+    // inaudible in quiet passages, "sizzle" when the music is dense. Hold
+    // newer-than-expected packets in a small seq-ordered map (30ms window) and
+    // emit strictly in sequence; flush past a hole once it clearly won't fill.
+    pend: HashMap<u16, Vec<u8>>,
+    next_seq: Option<u16>,
+    last_emit: std::time::Instant,
+}
+
+impl Sink {
+    /// Sequence-ordered emit: returns the packets ready to forward downstream.
+    fn emit_ordered(&mut self, rtp: &[u8]) -> Vec<Vec<u8>> {
+        let seq = u16::from_be_bytes([rtp[2], rtp[3]]);
+        let now = std::time::Instant::now();
+        let next = match self.next_seq {
+            None => {
+                self.next_seq = Some(seq.wrapping_add(1));
+                self.last_emit = now;
+                return vec![rtp.to_vec()];
+            }
+            Some(n) => n,
+        };
+        let d = seq.wrapping_sub(next);
+        if d == 0 {
+            let mut out = vec![rtp.to_vec()];
+            let mut nx = next.wrapping_add(1);
+            while let Some(p) = self.pend.remove(&nx) {
+                out.push(p);
+                nx = nx.wrapping_add(1);
+            }
+            self.next_seq = Some(nx);
+            self.last_emit = now;
+            return out;
+        }
+        if d < 0x8000 {
+            // Ahead of the cursor: a hole precedes it. Stash; flush in order
+            // once the window passes or the stash clearly outgrew a reorder.
+            self.pend.insert(seq, rtp.to_vec());
+            if self.pend.len() > 128
+                || now.duration_since(self.last_emit) >= std::time::Duration::from_millis(30)
+            {
+                let mut keys: Vec<u16> = self.pend.keys().copied().collect();
+                keys.sort_unstable();
+                let mut out = Vec::new();
+                let mut nx = next;
+                for k in keys {
+                    if k.wrapping_sub(nx) < 0x8000 {
+                        if let Some(p) = self.pend.remove(&k) {
+                            out.push(p);
+                            nx = k.wrapping_add(1);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                self.next_seq = Some(nx);
+                self.last_emit = now;
+                return out;
+            }
+            return Vec::new();
+        }
+        // Behind the cursor: late duplicate of something already forwarded.
+        Vec::new()
+    }
 }
 
 impl AudioSink for Sink {
@@ -31,8 +96,9 @@ impl AudioSink for Sink {
     fn on_rtp(&mut self, rtp: &[u8], _sample: u32) {
         if self.retired.load(Ordering::Acquire){return}
         crate::AUDIO_ACTIVITY.fetch_add(1, Ordering::Relaxed);
-        if self.out.active.load(Ordering::Relaxed) {
-            if self.out.player.push_rtp(rtp){self.forwarded.fetch_add(1,Ordering::Relaxed);}else{self.rejected.fetch_add(1,Ordering::Relaxed);}
+        if !self.out.active.load(Ordering::Relaxed) { return; }
+        for packet in self.emit_ordered(rtp) {
+            if self.out.player.push_rtp(&packet){self.forwarded.fetch_add(1,Ordering::Relaxed);}else{self.rejected.fetch_add(1,Ordering::Relaxed);}
         }
     }
 }
@@ -61,7 +127,7 @@ pub fn open(cfg: &AudioConfig, key: [u8; 32], on_started: StartedCb) -> Option<(
     let retired=Arc::new(AtomicBool::new(false));
     let forwarded=Arc::new(AtomicU64::new(0));
     let rejected=Arc::new(AtomicU64::new(0));
-    let stream = AudioStream::new(key, Box::new(Sink { out: out.clone(), on_started,retired:retired.clone(),forwarded:forwarded.clone(),rejected:rejected.clone() }));
+    let stream = AudioStream::new(key, Box::new(Sink { out: out.clone(), on_started,retired:retired.clone(),forwarded:forwarded.clone(),rejected:rejected.clone(),pend:HashMap::new(),next_seq:None,last_emit:std::time::Instant::now() }));
     let stats=stream.stats();
     let (recv, data_port, control_port) = match AudioReceiver::new(stream) {
         Ok(r) => r,
