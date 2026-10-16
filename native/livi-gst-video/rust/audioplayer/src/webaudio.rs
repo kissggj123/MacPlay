@@ -35,6 +35,10 @@ const MAGIC: u32 = 0x31415057;
 const RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
 const HEADER_LEN: usize = 20;
+/// Coalesce target: the pipeline emits small irregular chunks (~7 ms); WebKit
+/// crackles when the browser schedules hundreds of tiny AudioBuffers per
+/// second. Flush whole 20 ms blocks and keep the remainder buffered.
+const TARGET_FRAME_BYTES: usize = 48_000 * 2 * 2 / 50;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -82,7 +86,7 @@ fn ensure_server() {
                     let Ok(mut s) = stream else { continue };
                     // One channel per TCP client (the Node relay). Bounded;
                     // a slow relay drops frames rather than stalling taps.
-                    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(64);
+                    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(256);
                     if let Ok(mut c) = clients().lock() {
                         c.push(tx);
                     }
@@ -129,6 +133,8 @@ pub fn maybe_register(pipeline: &gst::Pipeline, media: bool) -> Option<u32> {
     }
     ensure_server();
     let flags: u16 = if media { 1 } else { 0 };
+    // Per-tap coalescing buffer (owned by the appsink callback, FnMut).
+    let mut pending: Vec<u8> = Vec::with_capacity(TARGET_FRAME_BYTES * 2);
     appsink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
@@ -141,6 +147,14 @@ pub fn maybe_register(pipeline: &gst::Pipeline, media: bool) -> Option<u32> {
                 if pcm.is_empty() {
                     return Ok(gst::FlowSuccess::Ok);
                 }
+                pending.extend_from_slice(&pcm);
+                // Flush whole 20 ms blocks; the remainder rides along with the
+                // next chunk. A sub-block tail is dropped on unregister (stream end).
+                if pending.len() < TARGET_FRAME_BYTES {
+                    return Ok(gst::FlowSuccess::Ok);
+                }
+                let flush_len = pending.len() - pending.len() % TARGET_FRAME_BYTES;
+                let pcm: Vec<u8> = pending.drain(..flush_len).collect();
                 let seq = if let Ok(mut s) = seqs().lock() {
                     let e = s.entry(id).or_insert(0);
                     *e = e.wrapping_add(1);

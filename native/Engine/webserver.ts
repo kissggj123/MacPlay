@@ -298,10 +298,46 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       }, 2000)
     }
   }
+  // Fork (wheelplay port): per-viewer audio outbox. Frames queue per stream
+  // and expire by PCM duration — media keeps ~900 ms, non-media 150 ms, with a
+  // 128-frame hard cap — so a slow car browser drops the OLDEST audio (bounded
+  // latency, latest audio always survives) instead of bursting stale samples
+  // later. A socket backlogged beyond AUDIO_SEND_LIMIT holds new frames in its
+  // outbox until it drains. The Rust tap only sees a fast local consumer.
+  interface QueuedAudio { data: Buffer; stream: number; media: boolean; millis: number }
+  const AUDIO_BUDGET_MS = { media: 900, other: 150 }
+  const AUDIO_MAX_FRAMES = 128
+  const AUDIO_SEND_LIMIT = 512 * 1024
+  const audioOutboxes = new WeakMap<net.Socket, QueuedAudio[]>()
   function broadcastAudio(frame: Buffer): void {
+    // WAP1 header: magic u32, stream i32, rate u32, channels u16, flags u16, seq u32.
+    if (frame.length < 22) return
+    const stream = frame.readInt32LE(4)
+    const rate = frame.readUInt32LE(8)
+    const channels = frame.readUInt16LE(12)
+    if (rate < 8000 || rate > 96000 || channels < 1 || channels > 2) return
+    const media = (frame.readUInt16LE(14) & 1) !== 0
+    const millis = (frame.length - 20) * 1000 / (rate * channels * 2)
+    const budget = media ? AUDIO_BUDGET_MS.media : AUDIO_BUDGET_MS.other
     for (const sock of wsClients) {
       if ((sock as any).destroyed) { wsClients.delete(sock); continue }
-      wsSendBinary(sock, frame)
+      let outbox = audioOutboxes.get(sock)
+      if (!outbox) { outbox = []; audioOutboxes.set(sock, outbox) }
+      outbox.push({ data: frame, stream, media, millis })
+      // Duration budget per stream: expire the oldest frames of this stream.
+      let queued = 0, count = 0
+      for (const q of outbox) if (q.stream === stream) { queued += q.millis; count++ }
+      while (queued > budget && count > 1) {
+        const idx = outbox.findIndex((q) => q.stream === stream)
+        queued -= outbox[idx].millis; count--
+        outbox.splice(idx, 1)
+      }
+      while (outbox.length > AUDIO_MAX_FRAMES) outbox.shift()
+      // Drain: hold frames while the socket is backlogged (car screen off,
+      // WiFi roaming) instead of growing the kernel buffer with stale audio.
+      while (outbox.length && sock.writableLength < AUDIO_SEND_LIMIT) {
+        wsSendBinary(sock, outbox.shift()!.data)
+      }
     }
   }
   // Fork: TCP relay from the Rust audio tap (webaudio.rs). Length-prefixed
