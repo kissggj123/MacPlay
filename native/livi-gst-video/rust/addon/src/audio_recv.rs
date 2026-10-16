@@ -105,8 +105,8 @@ pub fn statistics() -> String {
     let rows:Vec<String>=ears.iter().map(|(id,ear)|{
         let s=&ear.stats;
         let (decoded,errors)=feed::audio_out(*id).map(|o|o.player.statistics()).unwrap_or_default();
-        format!("{{\"id\":{id},\"packets\":{},\"bytes\":{},\"decrypted\":{},\"invalid\":{},\"authenticationErrors\":{},\"forwarded\":{},\"rejected\":{},\"decodedBuffers\":{decoded},\"pipelineErrors\":{errors},\"silenceMs\":{}}}",
-            s.packets.load(Ordering::Relaxed),s.bytes.load(Ordering::Relaxed),s.decrypted.load(Ordering::Relaxed),s.invalid.load(Ordering::Relaxed),s.authentication_errors.load(Ordering::Relaxed),ear.forwarded.load(Ordering::Relaxed),ear.rejected.load(Ordering::Relaxed),s.silence_ms().map(|v|v.to_string()).unwrap_or("null".into()))
+        format!("{{\"id\":{id},\"packets\":{},\"bytes\":{},\"decrypted\":{},\"invalid\":{},\"authenticationErrors\":{},\"forwarded\":{},\"rejected\":{},\"decodedBuffers\":{decoded},\"pipelineErrors\":{errors},\"silenceMs\":{},\"seqGaps\":{},\"seqDups\":{},\"seqReorders\":{}}}",
+            s.packets.load(Ordering::Relaxed),s.bytes.load(Ordering::Relaxed),s.decrypted.load(Ordering::Relaxed),s.invalid.load(Ordering::Relaxed),s.authentication_errors.load(Ordering::Relaxed),ear.forwarded.load(Ordering::Relaxed),ear.rejected.load(Ordering::Relaxed),s.silence_ms().map(|v|v.to_string()).unwrap_or("null".into()),s.seq_gaps.load(Ordering::Relaxed),s.seq_dups.load(Ordering::Relaxed),s.seq_reorders.load(Ordering::Relaxed))
     }).collect();
     format!("[{}]",rows.join(","))
 }

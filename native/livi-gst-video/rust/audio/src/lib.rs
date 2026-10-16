@@ -6,7 +6,7 @@
 //! as associated data.
 
 use livi_crypto_node::open_impl;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{Arc, atomic::{AtomicI64, AtomicU64, Ordering}};
 use std::time::Instant;
 
 pub struct ReceiveStats {
@@ -15,11 +15,19 @@ pub struct ReceiveStats {
     pub decrypted: AtomicU64,
     pub invalid: AtomicU64,
     pub authentication_errors: AtomicU64,
+    // RTP sequence continuity (fork): the engine cannot count packets that
+    // never arrived, so every downstream counter reads clean while the network
+    // eats datagrams. Track gaps/dups/reorders from the RTP header — a burst
+    // overflowing the UDP receive buffer shows up here as gaps.
+    pub seq_gaps: AtomicU64,
+    pub seq_dups: AtomicU64,
+    pub seq_reorders: AtomicU64,
+    last_seq: AtomicI64,
     last_packet_ms: AtomicU64,
     began: Instant,
 }
 impl Default for ReceiveStats {
-    fn default() -> Self { Self {packets:0.into(),bytes:0.into(),decrypted:0.into(),invalid:0.into(),authentication_errors:0.into(),last_packet_ms:0.into(),began:Instant::now()} }
+    fn default() -> Self { Self {packets:0.into(),bytes:0.into(),decrypted:0.into(),invalid:0.into(),authentication_errors:0.into(),seq_gaps:0.into(),seq_dups:0.into(),seq_reorders:0.into(),last_seq:(-1).into(),last_packet_ms:0.into(),began:Instant::now()} }
 }
 impl ReceiveStats {
     pub fn silence_ms(&self) -> Option<u64> {
@@ -89,6 +97,22 @@ impl AudioStream {
         };
 
         self.stats.decrypted.fetch_add(1,Ordering::Relaxed);
+        // RTP sequence continuity (fork): RFC 3550 sequence, bytes 2..4.
+        let seq = u16::from_be_bytes([packet[2], packet[3]]);
+        let last = self.stats.last_seq.load(Ordering::Relaxed);
+        if last >= 0 {
+            let diff = seq.wrapping_sub(last as u16) as i16 as i64;
+            if diff == 0 {
+                self.stats.seq_dups.fetch_add(1,Ordering::Relaxed);
+            } else if diff > 0 {
+                if diff > 1 {
+                    self.stats.seq_gaps.fetch_add((diff - 1) as u64,Ordering::Relaxed);
+                }
+            } else {
+                self.stats.seq_reorders.fetch_add(1,Ordering::Relaxed);
+            }
+        }
+        self.stats.last_seq.store(seq as i64,Ordering::Relaxed);
         let sample = u32::from_be_bytes([packet[4], packet[5], packet[6], packet[7]]);
         // Reported once per connection. The phone sends buffered media in
         // bursts with gaps.
@@ -411,6 +435,12 @@ pub mod receiver {
         // dual stack: the phone may reach us over either family
         socket.set_only_v6(false)?;
         socket.bind(&"[::]:0".parse::<std::net::SocketAddr>().unwrap().into())?;
+        // Fork: the phone sends media in bursts with gaps. macOS's default UDP
+        // receive buffer (~40-64 KB) can overflow mid-burst and silently drop
+        // datagrams — audible as a light constant crackle. Ask for more headroom.
+        if let Err(e) = socket.set_recv_buffer_size(512 * 1024) {
+            eprintln!("[cp_audio_rx] SO_RCVBUF 512KB refused: {e}");
+        }
         let sock: UdpSocket = socket.into();
         sock.set_read_timeout(Some(POLL))?;
         Ok(sock)
