@@ -108,6 +108,36 @@ What to watch in the build log:
    (find the Mac IP in System Settings → Wi-Fi → Details, or `ipconfig getifaddr en0`).
 5. Touch the browser page → CarPlay responds. Two-finger touch supported.
 
+### Car browser blocked on private IPs (iPhone hotspot = 172.20.10.x)
+
+Some car head-unit browsers (Tesla-style policy) refuse to open URLs whose
+host is a private-range IP literal. The iPhone personal hotspot puts every
+device in `172.20.10.0/28`, so the car browser cannot open
+`http://172.20.10.x:8080/` even though the network path is fine.
+
+What [wheelplay](https://github.com/fython/wheelplay) does (TESLA_HTTP.md)
+does **not** port to this scenario: its no-root VPN trick works because the
+Android phone IS the hotspot gateway, so packets sent to the public-looking
+`6.6.6.6` fall back to the phone's own TUN and get delivered locally. With an
+iPhone hotspot the gateway is the iPhone and the Mac is just a client — a
+packet for any public IP leaves toward cellular and can never be intercepted
+by the Mac.
+
+What this fork does instead:
+
+- **`.local` hostname address**: the settings page lists
+  `http://<mac-local-hostname>.local:8080/` (and the HTTPS port) next to the
+  IP entries. mDNS resolves the name on the LAN; if the car browser only
+  blocks IP *literals*, the page opens normally — the client builds its
+  WebSocket/HTTPS URLs from `location.host`, so touch/audio/HTTPS follow the
+  name automatically. The car browser must support mDNS resolution for this
+  to work (try it; it costs nothing).
+- **In-app warning**: when a routable interface sits in `172.x`, the address
+  section explains the block and points at the `.local` entry first.
+- **Last resort**: join the car and the Mac to the car's own Wi-Fi or a home
+  Wi-Fi (`192.168.x`) instead of the iPhone hotspot, and use wired/USB
+  CarPlay on the Mac side while in the car.
+
 ### Car mode: display off, system awake (separate window)
 
 Two-window workflow in the car:
@@ -169,6 +199,14 @@ browser:
   ~60 ms for voice. No Opus encoding on the Mac, no `<audio>` streaming lag.
   Mute button top-right; playback starts after the first tap (browser
   autoplay policy).
+- **Underrun recovery (wheelplay semantics)**: on an underrun the browser
+  drops the stream's queued-but-unstarted nodes (silent) and re-anchors the
+  schedule at the full buffer depth, deepening the adaptive target by 100 ms
+  first (media 0.35 s / nav 0.15 s / call 0.06 s floors, decay −20 ms per 20
+  s healthy). Re-anchoring at a small epsilon instead pins the lead at ~20 ms;
+  with the Mac's real-time paced delivery that lead never rebuilds, and every
+  later delivery jitter underruns again — a continuous "cassette" stutter.
+  Keep the recovery anchored at the full target.
 
 **The Mac itself stays silent** — local `osxaudiosink` playback is dropped in
 web mode; audio goes to the car browser instead.
