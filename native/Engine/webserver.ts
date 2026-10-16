@@ -433,9 +433,33 @@ export function startWebServer(opts: WebServerOpts): http.Server {
     return nals
   }
 
+  // Fork (weak-network): between "keep feeding" and the 8MB half-open kick
+  // there was nothing — a slow car browser let the socket backlog grow until
+  // the kick cost a full reconnect (visible freeze). Past 1.5MB queued, skip
+  // non-key NALs until the next IDR (config NALs always pass) and ask the
+  // phone for a keyframe (2s throttle per client) — latency stays bounded and
+  // the stream resumes from the IDR without dropping the client.
+  const VIDEO_SKIP_PENDING = 1.5 * 1024 * 1024
+  const videoKeyReqAt = new WeakMap<net.Socket, number>()
+  function isKeyNal(nal: Buffer): boolean {
+    const t = getNalType(nal)
+    if (videoCodec === 'h265') return t === 19 || t === 20 || t === 21 || t === 32 || t === 33 || t === 34
+    return t === 5 || t === 7 || t === 8
+  }
   function sendNalToClients(nal: Buffer): void {
     for (const sock of h264Clients) {
       if ((sock as any).destroyed) { h264Clients.delete(sock); continue }
+      if (sock.writableLength > VIDEO_SKIP_PENDING && !isKeyNal(nal)) {
+        const now = Date.now()
+        if (now - (videoKeyReqAt.get(sock) ?? 0) > 2000) {
+          videoKeyReqAt.set(sock, now)
+          const stack = opts.getStack()
+          if (stack && typeof (stack as any).forceMainKeyframe === 'function') {
+            try { (stack as any).forceMainKeyframe() } catch { /* ignore */ }
+          }
+        }
+        continue
+      }
       wsSendBinary(sock, nal)
     }
   }

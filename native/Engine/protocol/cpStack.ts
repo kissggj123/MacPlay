@@ -405,6 +405,11 @@ export class CpStack extends EventEmitter {
     return this._liveSession?.pairVerify.controllerId ?? null
   }
 
+  /** Fork: live audio streams (0 = the phone has not set up audio this session). */
+  get audioStreamCount(): number {
+    return this._liveSession?.audioMeta.length ?? 0
+  }
+
   /** Sets the level of every stream of this audioType in the host. */
   setStreamVolume(audioType: number, level: number, rampMs: number): void {
     for (const [id, entry] of this._audioById) {

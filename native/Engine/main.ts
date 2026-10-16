@@ -123,7 +123,19 @@ const server=net.createServer(socket=>{
   // after a resolution renegotiation (or a fresh session with the browser
   // already open) resume playback so audio follows the display seamlessly.
   if(browserClientCount()===0)setTimeout(()=>{if(browserClientCount()===0){try{stack.sendMedia(2)}catch{}}},1500)
-  else if(settings.audioEnabled!==false&&settings.autoResumeOnBrowser!==false)setTimeout(()=>{if(browserClientCount()>0){try{stack.sendMedia(1)}catch{}}},2000)})
+  else if(settings.audioEnabled!==false&&settings.autoResumeOnBrowser!==false)setTimeout(()=>{
+   if(browserClientCount()===0)return
+   // Fork: after a USB re-enumeration (cellular-data toggle / low-power-mode
+   // flip bounces the iPhone's USB composite device) the phone can come back
+   // "playing" but never re-SETUP the audio stream in the new session — a bare
+   // Play is a no-op while already playing. Only when the session still has no
+   // audio stream, toggle pause→play to force the audio re-route (same effect
+   // as replugging a Bluetooth headphone). A healthy session has its streams
+   // within ~1s and is left untouched.
+   if(stack.audioStreamCount>0)return
+   try{stack.sendMedia(2)}catch{}
+   setTimeout(()=>{try{stack.sendMedia(1)}catch{}},200)
+  },2500)})
  stack.on('disconnect-reason',(reason:string)=>{disconnectReason=reason})
  stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;syncSleepAssertion();
   // Fork: a browser-driven display change intentionally drops the session so
