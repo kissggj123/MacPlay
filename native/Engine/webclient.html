@@ -194,6 +194,12 @@
         <button type="button" data-v="off">隐藏</button>
       </div>
     </div>
+    <div class="row"><span class="lbl">缩放模式</span>
+      <div class="seg" id="fitseg">
+        <button type="button" data-v="fit" class="active">适应</button>
+        <button type="button" data-v="fill">填充</button>
+      </div>
+    </div>
     <div class="row"><span class="lbl">UI 缩放</span>
       <select id="uiscale" class="rowselect"><option value="75">小 75%</option><option value="85">较小 85%</option>
       <option value="100" selected>默认 100%</option><option value="115">大 115%</option></select>
@@ -282,6 +288,28 @@
       b.addEventListener('click',function(){ setHud(b.getAttribute('data-v')==='off'); });
     })(hudBtns[hi]);
     setHud(hudHidden);
+  }
+  // Fork: 缩放模式 like a fullscreen video player — 适应=contain (letterbox),
+  // 填充=cover (crop the stream to fill the window, no bars). Touch mapping
+  // follows the same math (mapPoint below), so taps stay accurate when
+  // cropped. Persisted per device.
+  var fillMode=false;
+  try{ fillMode=localStorage.getItem('niofill')==='fill'; }catch(e){}
+  var fitSeg=document.getElementById('fitseg');
+  if(fitSeg){
+    var fitBtns=fitSeg.querySelectorAll('button');
+    function setFit(fill){
+      fillMode=fill;
+      try{ localStorage.setItem('niofill',fill?'fill':'fit'); }catch(x){}
+      var val=fill?'cover':'contain';
+      ['v','c','rv'].forEach(function(id){var el=document.getElementById(id);if(el)el.style.objectFit=val;});
+      for(var fi=0;fi<fitBtns.length;fi++)
+        fitBtns[fi].classList.toggle('active',fitBtns[fi].getAttribute('data-v')==='fill'===fill);
+    }
+    for(var fj=0;fj<fitBtns.length;fj++)(function(b){
+      b.addEventListener('click',function(){ setFit(b.getAttribute('data-v')==='fill'); });
+    })(fitBtns[fj]);
+    setFit(fillMode);
   }
   // Fork: WebRTC direct passthrough state (H.264, LAN host candidates).
   var rv=document.getElementById('rv');
@@ -1289,7 +1317,9 @@
   /* ============ touch ============ */
   function mapPoint(clientX,clientY,rect,width,height,clamp){
     if(width<=0||height<=0||rect.width<=0||rect.height<=0) return null;
-    var scale=Math.min(rect.width/width,rect.height/height);
+    var scale=fillMode
+      ?Math.max(rect.width/width,rect.height/height)   // cover: fill window, crop overflow
+      :Math.min(rect.width/width,rect.height/height);   // contain: fit, letterbox
     var w=width*scale, h=height*scale;
     var x=(clientX-rect.left-(rect.width-w)/2)/w;
     var y=(clientY-rect.top-(rect.height-h)/2)/h;
