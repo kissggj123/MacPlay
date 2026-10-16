@@ -14,7 +14,7 @@ REQUIRED_ARCHES=("$TARGET_ARCH")
 if [[ "$TARGET_ARCH" == universal ]]; then REQUIRED_ARCHES=(arm64 x86_64); fi
 source scripts/prepare-macos-runtime.sh
 NODE_BIN="${MACPLAY_NODE_BIN:-$NODE_BIN}"
-APP="${MACPLAY_APP_OUTPUT:-$PWD/dist/NIO.app}"
+APP="${MACPLAY_APP_OUTPUT:-$PWD/dist/NIO Play.app}"
 RES="$APP/Contents/Resources"
 RECEIVER="$RES/runtime/MacPlayReceiver.app"
 mkdir -p "$APP/Contents/MacOS" "$RES/runtime" "$RES/engine/node_modules" "$RES/driver" "$RES/gstreamer"
@@ -135,8 +135,8 @@ codesign --force --deep --sign "$SIGN_ID" "$APP"
 if [[ "${1:-}" != "--app-only" ]]; then
  mkdir -p build/dmg
  ln -sfn /Applications build/dmg/Applications
- rm -rf build/dmg/NIO.app
- ditto "$APP" build/dmg/NIO.app
+ rm -rf build/dmg/*.app
+ ditto "$APP" "build/dmg/NIO Play.app"
 
  hdiutil create -ov -volname "NIO Play" -srcfolder build/dmg -format UDZO "dist/NIOPlay-${APP_VERSION}.${BUILD_NUM}-${TARGET_ARCH}.dmg"
 fi
