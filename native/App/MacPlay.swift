@@ -1208,26 +1208,12 @@ struct SettingsView: View {
                         }
                     case .display:
                         Section(L("分辨率")) {
-                            Picker(L("分辨率"),selection:Binding(get:{model.settings.resolution},set:{
-                                model.settings.resolution=$0;model.updateResolution();model.persistPreferences()
-                            })) {
-                                Text(L("屏幕原生像素（避开刘海）")).tag("native")
-                                Text("800×480").tag("800x480")
-                                Text("1280×720").tag("1280x720")
-                                Text("1920×720").tag("1920x720")
-                                Text("1920×1080").tag("1920x1080")
-                                Text("2560×1440").tag("2560x1440")
-                                Text(L("自定义")).tag("custom")
-                            }
-                            if model.settings.resolution == "custom" {
-                                HStack {
-                                    TextField(L("宽度（像素）"),value:Binding(get:{model.settings.width},set:{model.settings.width=$0;model.persistPreferences()}),format:.number.grouping(.never)).frame(width:110)
-                                    TextField(L("高度（像素）"),value:Binding(get:{model.settings.height},set:{model.settings.height=$0;model.persistPreferences()}),format:.number.grouping(.never)).frame(width:110)
-                                }
-                            } else {
-                                LabeledContent(L("请求像素"),value:"\(model.settings.width)×\(model.settings.height)")
-                            }
-                            Text(L("分辨率与帧率修改后需点击「应用并重新连接」生效。")).font(.callout).foregroundStyle(.secondary)
+                            // Fork: the car browser IS the display — resolution is negotiated
+                            // and remembered by the head unit's web client (webclient.html
+                            // 显示 tab), the Mac only relays. Read-only here.
+                            LabeledContent(L("请求像素"),value:"\(model.settings.width)×\(model.settings.height)")
+                            LabeledContent(L("来源"),value: model.settings.resolution == "custom" ? L("车机浏览器上报") : L("默认（车机连接后自动跟随）"))
+                            Text(L("分辨率由车机浏览器「显示」设置决定并按设备记忆，Mac 仅作中继。车机连接后自动按其窗口像素协商，如需修改请在车机网页操作。")).font(.callout).foregroundStyle(.secondary)
                         }
                         Section(L("最高帧率")) {
                             Picker(L("最高帧率"),selection:Binding(get:{model.settings.fps},set:{model.settings.fps=$0;model.persistPreferences()})) {
