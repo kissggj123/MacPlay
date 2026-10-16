@@ -210,6 +210,10 @@
       <select id="uiscale" class="rowselect"><option value="75">小 75%</option><option value="85">较小 85%</option>
       <option value="100" selected>默认 100%</option><option value="115">大 115%</option></select>
     </div>
+    <div class="row"><span class="lbl">屏幕物理宽度</span>
+      <select id="mmsel" class="rowselect"></select>
+    </div>
+    <div class="hint" id="mmhint" style="display:none">已保存，重新启动接收后生效</div>
     <button type="button" id="matchwin" class="ghostbtn">匹配本窗口像素</button>
     <button type="button" id="applydisplay" class="primarybtn">应用显示设置</button>
     <div class="sect">安全边距</div>
@@ -1529,7 +1533,7 @@
   document.getElementById('matchwin').addEventListener('click',function(){
     var dpr=window.devicePixelRatio||1;
     var w=Math.round(window.innerWidth*dpr), h=Math.round(window.innerHeight*dpr);
-    send({t:'display', width:w, height:h, matchWindow:true});
+    send({t:'display', width:w, height:h, matchWindow:true, widthMm:getWidthMm()});
   });
 
   /* ============ auto fit: negotiate once at page load ============ */
@@ -1561,8 +1565,34 @@
     if(saved&&(Math.abs(cw-saved.w)/saved.w>0.15||Math.abs(ch-saved.h)/saved.h>0.15)){ w=cw; h=ch; }
     sentFit=true;
     try{ localStorage.setItem('nioDisplay',JSON.stringify({w:w,h:h})); }catch(e){}
-    send({t:'display', width:w, height:h, matchWindow:true});
+    send({t:'display', width:w, height:h, matchWindow:true, widthMm:getWidthMm()});
   }
+  // Fork: the car browser IS the display — it owns the advertised physical
+  // width (iOS picks its CarPlay layout from physical-size brackets). Stored
+  // per device in localStorage; default 200mm = the protocol's known-good
+  // width basis (DiPlay/WheelPlay default). Sent with every display request.
+  var mmSel=document.getElementById('mmsel'), mmHint=document.getElementById('mmhint');
+  function getWidthMm(){
+    var v=parseInt(localStorage.getItem('niomm')||'200',10);
+    return (v>=100&&v<=400)?v:200;
+  }
+  (function(){
+    var cur=getWidthMm();
+    for(var mm=100;mm<=400;mm+=25){
+      var o=document.createElement('option');
+      o.value=String(mm); o.textContent=mm+' mm'+(mm===200?'（默认）':'');
+      if(mm===cur)o.selected=true;
+      mmSel.appendChild(o);
+    }
+    mmSel.addEventListener('change',function(){
+      try{ localStorage.setItem('niomm',mmSel.value); }catch(e){}
+      var d=null;
+      try{ d=JSON.parse(localStorage.getItem('nioDisplay')||'null'); }catch(e){}
+      send({t:'display', width:(d&&d.w)||1920, height:(d&&d.h)||1080, matchWindow:true, widthMm:parseInt(mmSel.value,10)});
+      mmHint.style.display='block';
+      setTimeout(function(){ mmHint.style.display='none'; },3000);
+    });
+  })();
   function sendFit(){
     if(sentFit) return;
     // Ask whether switching is possible (wired sessions veto it); fall back to

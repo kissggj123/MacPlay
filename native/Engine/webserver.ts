@@ -35,6 +35,9 @@ export interface TouchStack {
 export interface DisplayConfig {
   width: number; height: number; fps: number
   codec: string; uiscale: number; matchWindow?: boolean
+  /** Fork: advertised physical width in mm, owned by the car browser (the real
+   * display). iOS picks its CarPlay layout from physical-size brackets. */
+  widthMm?: number
 }
 export interface WebServerOpts {
   httpPort: number
@@ -265,6 +268,7 @@ function handleTouchMessage(raw: string, opts: WebServerOpts, sock: net.Socket):
         : (opts.currentVideoCodec?.() === 'h265' ? 'hevc' : 'h264'),
       uiscale: [75, 85, 100, 115].includes(Number(msg.uiscale)) ? Number(msg.uiscale) : 100,
       matchWindow: !!msg.matchWindow,
+      widthMm: Number(msg.widthMm) >= 100 && Number(msg.widthMm) <= 2000 ? Math.round(Number(msg.widthMm)) : undefined,
     }
     const stackAny = stack as any
     if (typeof stackAny.setDisplay === 'function') {
@@ -274,7 +278,7 @@ function handleTouchMessage(raw: string, opts: WebServerOpts, sock: net.Socket):
       // the engine persists the change for the next receiver start — the
       // client shows an honest "saved for next start" instead of assuming a
       // renegotiation that will never happen.
-      wsSendText(sock, JSON.stringify({ t: 'displayResult', applied: opts.displaySwitchable?.() ?? false, width: cfg.width, height: cfg.height }))
+      wsSendText(sock, JSON.stringify({ t: 'displayResult', applied: opts.displaySwitchable?.() ?? false, width: cfg.width, height: cfg.height, widthMm: cfg.widthMm }))
     } else {
       console.error(`[webserver] display config requested ${cfg.width}x${cfg.height}@${cfg.fps} ${cfg.codec}, no setDisplay on stack`)
     }

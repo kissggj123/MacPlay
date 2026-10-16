@@ -1229,17 +1229,6 @@ struct SettingsView: View {
                             }
                             Text(L("分辨率与帧率修改后需点击「应用并重新连接」生效。")).font(.callout).foregroundStyle(.secondary)
                         }
-                        Section(L("屏幕物理宽度")) {
-                            Picker(L("屏幕物理宽度"),selection:Binding(get:{model.settings.widthMmOverride ?? 0},set:{
-                                model.settings.widthMmOverride=$0>0 ? $0 : nil;model.persistPreferences()
-                            })) {
-                                Text(L("自动（按Mac屏幕推导）")).tag(0)
-                                ForEach(stride(from:100,through:400,by:25).map{$0},id:\.self){ mm in
-                                    Text("\(mm) mm").tag(mm)
-                                }
-                            }
-                            Text(L("iOS按屏幕物理宽度分档决定CarPlay布局，档位不符会在画面内渲染黑边。车机出现内嵌黑边时依次尝试200/225/250等值，每次修改后重新启动接收生效。")).font(.callout).foregroundStyle(.secondary)
-                        }
                         Section(L("最高帧率")) {
                             Picker(L("最高帧率"),selection:Binding(get:{model.settings.fps},set:{model.settings.fps=$0;model.persistPreferences()})) {
                                 Text("30 fps").tag(30)

@@ -201,7 +201,7 @@ export class CpStack extends EventEmitter {
   deviceFilter: ((id: string) => boolean) | null = null
   /** Fork: called by setDisplay so the host can persist the change across restarts.
    *  Return false to veto the change (the session is kept untouched). */
-  onDisplayChange: ((cfg: { width: number; height: number; fps: number; codec: string }) => boolean | void) | null = null
+  onDisplayChange: ((cfg: { width: number; height: number; fps: number; codec: string; widthMm?: number }) => boolean | void) | null = null
   private deviceAccepted = false
   private readonly _conns = new Set<net.Socket>()
   private _configRefresh: (() => void) | null = null
@@ -1331,7 +1331,7 @@ export class CpStack extends EventEmitter {
    * for the NEXT session carries it (cfg is shared by reference), onDisplayChange
    * persists it across engine restarts, then the live session is dropped so the
    * phone reconnects and renegotiates the stream. */
-  setDisplay(cfg: { width: number; height: number; fps: number; codec: string }): void {
+  setDisplay(cfg: { width: number; height: number; fps: number; codec: string; widthMm?: number }): void {
     // Fork: let the host veto first — a wired USB session never reconnects after
     // the drop (the phone treats it as user-initiated teardown), so renegotiating
     // for the browser's window size would stall the receiver. The browser client
@@ -1344,6 +1344,12 @@ export class CpStack extends EventEmitter {
         widthPixels: cfg.width,
         heightPixels: cfg.height,
         fps: cfg.fps,
+        // Fork: the car browser owns the advertised physical size; keep the
+        // height ratio-consistent (same math as display.ts' override path).
+        ...(cfg.widthMm ? {
+          widthPhysicalMm: cfg.widthMm,
+          heightPhysicalMm: Math.max(1, Math.round(cfg.widthMm * cfg.height / cfg.width)),
+        } : {}),
       },
     })
     console.log(

@@ -123,12 +123,14 @@ const server=net.createServer(socket=>{
   try{
    const cur=JSON.parse(fs.readFileSync(settingsFile,'utf8'))
    cur.width=cfg.width;cur.height=cfg.height;cur.fps=cfg.fps;cur.webCodec=cfg.codec
+   if(cfg.widthMm)cur.widthMmOverride=cfg.widthMm // the car browser owns the physical size
    cur.resolution='custom' // keep the Mac app's preset picker from clobbering it
    fs.writeFileSync(settingsFile, JSON.stringify(cur,null,2))
   }catch(e){console.error('[engine] persist display settings failed:',(e as Error).message)}
   if(wired)return false
   try{
    settings.width=cfg.width;settings.height=cfg.height;settings.fps=cfg.fps
+   if(cfg.widthMm)settings.widthMmOverride=cfg.widthMm
    config.main=displayConfig(settings)
    config.hevc=cfg.codec!=='h264'
   }catch(e){console.error('[engine] apply display settings failed:',(e as Error).message)}
