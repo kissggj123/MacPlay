@@ -65,7 +65,10 @@
   #mutebtn{top:10px;right:10px}
   #focusbtn{top:10px;right:64px}
   #panelbtn{top:10px;right:118px}
-  #panelbtn.active{background-image:var(--rb);color:#fff;border-color:transparent}
+  #fsbtn{top:10px;right:172px}
+  #fsbtn.active,#panelbtn.active{background-image:var(--rb);color:#fff;border-color:transparent}
+  /* CSS immersive fallback when the Fullscreen API is unavailable/refused */
+  body.cssfs #hint{display:none}
   #mutebtn .ic-muted{display:none}
   #mutebtn.muted .ic-on{display:none}
   #mutebtn.muted .ic-muted{display:inline}
@@ -157,6 +160,9 @@
 </button>
 <button id="focusbtn" class="cbtn" title="专注模式">
   <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+</button>
+<button id="fsbtn" class="cbtn" title="全屏">
+  <svg viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></svg>
 </button>
 <button id="panelbtn" class="cbtn" title="设置">
   <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -1461,6 +1467,46 @@
   focusbtn.addEventListener('click',function(e){
     e.stopPropagation();
     document.body.classList.toggle('focus');
+  });
+
+  /* ============ fullscreen ============ */
+  // Car browsers ship without the Fullscreen API, with only the WebKit-prefixed
+  // variant, or reject it (embedded views without allowfullscreen). Try the
+  // standards + vendor paths, then fall back to a CSS immersive mode — the
+  // stream already fills the viewport, so hiding chrome is most of the win.
+  var fsbtn=document.getElementById('fsbtn');
+  function fsActive(){
+    return !!(document.fullscreenElement||document.webkitFullscreenElement||document.webkitCurrentFullScreenElement);
+  }
+  function cssFs(on){
+    document.body.classList.toggle('cssfs',on);
+    fsbtn.classList.toggle('active',on||fsActive());
+  }
+  fsbtn.addEventListener('click',function(e){
+    e.stopPropagation();
+    if(fsActive()||document.body.classList.contains('cssfs')){
+      var ex=document.exitFullscreen||document.webkitExitFullscreen||document.webkitCancelFullScreen;
+      if(fsActive()&&ex){ try{ ex.call(document); }catch(err){ cssFs(false); } }
+      else cssFs(false);
+      return;
+    }
+    var el=document.documentElement;
+    var rq=el.requestFullscreen||el.webkitRequestFullscreen||el.webkitRequestFullScreen;
+    if(rq){
+      try{
+        var p=rq.call(el);
+        if(p&&p.catch)p.catch(function(){
+          cssFs(true);
+          showToast('浏览器拒绝了全屏接口，已进入沉浸模式');
+        });
+        return;
+      }catch(err){}
+    }
+    cssFs(true);
+    showToast('此浏览器不支持全屏接口，已进入沉浸模式');
+  });
+  ['fullscreenchange','webkitfullscreenchange'].forEach(function(ev){
+    document.addEventListener(ev,function(){ fsbtn.classList.toggle('active',fsActive()); });
   });
 
   /* ============ settings panel ============ */
