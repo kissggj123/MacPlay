@@ -124,6 +124,7 @@ struct PlaySettings: Codable {
     var backgroundEnabled: Bool? = nil
     var launchAtLogin: Bool? = nil
     var preventSleepWhenConnected: Bool? = nil
+    var mjpegFallback: Bool? = nil
     var headless: Bool? = nil
     var zeroTranscode: Bool? = nil
     var screenCapture: Bool? = nil
@@ -1155,7 +1156,9 @@ struct SettingsView: View {
                             Toggle(L("允许后台运行"),isOn:Binding(get:{model.settings.backgroundEnabled ?? false},set:{model.settings.backgroundEnabled=$0;MacPlayApplicationDelegate.shared?.preferencesChanged()}))
                             Toggle(L("登录时启动"),isOn:Binding(get:{model.launchAtLoginEnabled},set:{model.setLaunchAtLogin($0)}))
                             Toggle(L("CarPlay连接时防止系统休眠"),isOn:Binding(get:{model.settings.preventSleepWhenConnected ?? false},set:{model.settings.preventSleepWhenConnected=$0;model.persistPreferences()}))
+                            Toggle(L("MJPEG兼容流"),isOn:Binding(get:{model.settings.mjpegFallback ?? true},set:{model.settings.mjpegFallback=$0;model.persistPreferences()}))
                             Text(L("连接期间阻止系统休眠（含合盖，需连接电源），显示器仍可正常熄屏。")).font(.callout).foregroundStyle(.secondary)
+                            Text(L("为不支持硬解直通的老旧车机浏览器保留8080端口的兼容画面。关闭后该通道无视频，可降低接收端CPU占用。")).font(.callout).foregroundStyle(.secondary)
                             Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要NIO Play保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
                         }
                         if !model.settings.wireless {Section(L("USB直连")) {

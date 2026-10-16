@@ -190,6 +190,10 @@ server.listen({port:17000,host:'::',ipv6Only:false},()=>{
 process.env.MACPLAY_WEB_PORT ||= '18081'
 process.env.MACPLAY_WEB_AUDIO_PORT ||= '18082'
 process.env.MACPLAY_H264_PORT ||= '18083'
+// Fork: settings.json mjpegFallback=false (default true) kills the MJPEG
+// fallback branch entirely — pipeline_desc() skips the always-on software
+// convert+scale+jpeg-encode tail and the receiver saves the CPU.
+if (settings.mjpegFallback === false) process.env.MACPLAY_WEB_NO_MJPEG = '1'
 process.env.MACPLAY_MIC_PORT ||= '18084'
 // Fork: MJPEG via GStreamer internal stream (websink).
 // The pipeline taps decoded frames directly (MACPLAY_WEB_PORT mode),

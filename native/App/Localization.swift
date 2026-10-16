@@ -317,6 +317,9 @@ enum MacPlayLocalization {
         // Menu bar enhancement (2026-10): status line / launch-at-login / copy address.
         "● 接收中": ("● 接收中", "● Receiving"),
         "○ 未连接": ("○ 未連線", "○ Not Connected"),
+        // MJPEG fallback toggle (2026-10): settings connection tab.
+        "MJPEG兼容流": ("MJPEG相容串流", "MJPEG Fallback Stream"),
+        "为不支持硬解直通的老旧车机浏览器保留8080端口的兼容画面。关闭后该通道无视频，可降低接收端CPU占用。": ("為不支援硬解直通的舊款車機瀏覽器保留8080埠的相容畫面。關閉後該通道無視訊，可降低接收端CPU佔用。", "Keeps the port-8080 compatibility video for older car browsers without hardware-decode passthrough. Turning it off removes video on that channel and lowers receiver CPU usage."),
         "登录时启动": ("登入時啟動", "Launch at Login"),
         "复制车机地址": ("複製車機位址", "Copy Car Browser Address"),
         "登录项注册失败": ("登入項註冊失敗", "Could not register login item"),
