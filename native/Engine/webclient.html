@@ -252,8 +252,8 @@
   var canvas=document.getElementById('c'), ctx2d=null;
   var h264ws=null, videoDecoder=null, decoderConfigured=false;
   var spsPps=null, frameCount=0, bytesCount=0, lastStatTime=Date.now();
-  var droppedFrames=0, rttMs=null, audioUnderruns=0;
-  var audioSplices=0, audioLastSample=new Map();
+  var droppedFrames=0, rttMs=null, audioUnderruns=0, audioOverflows=0;
+  var audioSplices=0, audioLastSample=new Map(), missingFrames=0, lastSeq=new Map();
   var hud=document.getElementById('hud');
   // Fork: HUD visibility lives in Settings > 显示 (状态浮层); persisted per
   // device. The always-on pill button cluttered the picture.
@@ -288,6 +288,8 @@
     if(droppedFrames>0) stats+='  丢帧'+droppedFrames;
     if(rttMs!==null) stats+='  '+rttMs+'ms';
     if(audioUnderruns>0) stats+='  欠载'+audioUnderruns;
+    if(audioOverflows>0) stats+='  溢出'+audioOverflows;
+    if(missingFrames>0) stats+='  缺帧'+missingFrames;
     if(audioSplices>0) stats+='  接缝'+audioSplices;
     hud.textContent=mode+'\n'+fps+' fps  '+kbps+' kbps'+stats+(extra?'\n'+extra:'');
     if(dt>=1){ frameCount=0; bytesCount=0; lastStatTime=now; }
@@ -923,11 +925,13 @@
     ' constructor(o){super();o=(o&&o.processorOptions)||{};',
     '  this.cap=Math.floor(sampleRate*2);this.buf=new Float32Array(this.cap*2);',
     '  this.r=0;this.w=0;this.filled=0;this.depth=0.3;this.running=false;',
-    '  this.underruns=0;this.last=0;this.fin=0;this.hl=0;this.hr=0;',
+    '  this.underruns=0;this.overflows=0;this.last=0;this.lastOv=0;this.fin=0;this.hl=0;this.hr=0;',
     '  this.port.onmessage=(e)=>{var d=e.data;',
     '   if(d.t==="pcm"){var p=d.pcm,n=(p.length/2)|0;',
     '    for(var i=0;i<n;i++){var w=this.w*2;this.buf[w]=p[i*2];this.buf[w+1]=p[i*2+1];',
-    '     this.w=(this.w+1)%this.cap;if(this.filled<this.cap)this.filled++;else this.r=(this.r+1)%this.cap;}',
+    '     this.w=(this.w+1)%this.cap;if(this.filled<this.cap)this.filled++;else{this.r=(this.r+1)%this.cap;',
+    '      this.overflows++;',
+    '      if(currentTime-this.lastOv>0.5){this.lastOv=currentTime;this.port.postMessage({t:"overflow",n:this.overflows});}}}',
     '   }else if(d.t==="depth"){this.depth=d.v;}};',
     ' }',
     ' process(inp,out){var o=out[0],n=o[0].length,c=o.length,k;',
@@ -973,6 +977,9 @@
             j.target=Math.min(1,j.target+0.1); j.healthySince=audioCtx.currentTime;
             try{ node.port.postMessage({t:'depth',v:j.target}); }catch(e){}
           }
+          // Ring full: the write side overwrote the oldest samples — a hole in
+          // playback the underrun counter never sees. HUD: 溢出N.
+          if(d.t==='overflow') audioOverflows=d.n;
         };
         node.connect(gainFor(frame.stream));
         // lastDepth left undefined so the send below informs the fresh worklet.
@@ -1012,6 +1019,16 @@
     // so nothing plays as a burst once unlocked
     if(!audioRunning){ ensureAudio(); showTapHint(); return; }
     var frame=decodeAudioPacket(buffer); if(!frame) return;
+    // Transport-loss probe: frames carry a per-tap sequence. A jump means a
+    // relay hop dropped frames (webserver outbox expiry under backlog) — a
+    // waveform hole the splice detector can miss in dense HF content, where
+    // adjacent samples legitimately jump far. HUD: 缺帧N.
+    var ps=lastSeq.get(frame.stream);
+    if(ps!==undefined){
+      var gap=(frame.sequence-ps)>>>0;
+      if(gap>1) missingFrames+=(gap>100000?1:gap-1);
+    }
+    lastSeq.set(frame.stream,frame.sequence);
     // Splice detector: the engine relay delivers PCM that must be sample-
     // contiguous within a stream. A big first-vs-last jump between frames
     // means the 20ms merge or the RTP stitch misaligned — exactly the

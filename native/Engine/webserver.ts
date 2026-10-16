@@ -309,6 +309,9 @@ export function startWebServer(opts: WebServerOpts): http.Server {
   const AUDIO_MAX_FRAMES = 128
   const AUDIO_SEND_LIMIT = 512 * 1024
   const audioOutboxes = new WeakMap<net.Socket, QueuedAudio[]>()
+  // Sizzle hunt: outbox expiry silently holes the waveform (budget/128-frame
+  // cap). Count every dropped frame and surface it throttled in the log.
+  let audioOutboxDropped = 0, audioOutboxLogAt = 0
   function broadcastAudio(frame: Buffer): void {
     // WAP1 header: magic u32, stream i32, rate u32, channels u16, flags u16, seq u32.
     if (frame.length < 22) return
@@ -327,12 +330,21 @@ export function startWebServer(opts: WebServerOpts): http.Server {
       // Duration budget per stream: expire the oldest frames of this stream.
       let queued = 0, count = 0
       for (const q of outbox) if (q.stream === stream) { queued += q.millis; count++ }
+      let dropped = 0
       while (queued > budget && count > 1) {
         const idx = outbox.findIndex((q) => q.stream === stream)
         queued -= outbox[idx].millis; count--
-        outbox.splice(idx, 1)
+        outbox.splice(idx, 1); dropped++
       }
-      while (outbox.length > AUDIO_MAX_FRAMES) outbox.shift()
+      while (outbox.length > AUDIO_MAX_FRAMES) { outbox.shift(); dropped++ }
+      if (dropped > 0) {
+        audioOutboxDropped += dropped
+        const now = Date.now()
+        if (now - audioOutboxLogAt > 5000) {
+          audioOutboxLogAt = now
+          console.log(`[webserver] audio outbox expired ${audioOutboxDropped} frames (backlogged browser)`)
+        }
+      }
       // Drain: hold frames while the socket is backlogged (car screen off,
       // WiFi roaming) instead of growing the kernel buffer with stale audio.
       while (outbox.length && sock.writableLength < AUDIO_SEND_LIMIT) {

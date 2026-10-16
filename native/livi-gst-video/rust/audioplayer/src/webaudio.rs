@@ -104,6 +104,42 @@ fn ensure_server() {
     });
 }
 
+/// Debug (sizzle hunt): archive the exact merged PCM the engine hands to
+/// browsers — `MACPLAY_AUDIO_DUMP=<path>`, first ~2 minutes per process,
+/// then capped. Comparing this file against the browser-side symptom splits
+/// the search space: artifact in the dump = engine-side corruption; clean
+/// dump + audible sizzle = loss downstream (outbox/ring-buffer/device).
+const DUMP_CAP_BYTES: usize = 48_000 * 2 * 2 * 120;
+static DUMP: OnceLock<Mutex<Option<(std::fs::File, usize)>>> = OnceLock::new();
+
+fn dump_pcm(pcm: &[u8]) {
+    let Some(path) = std::env::var_os("MACPLAY_AUDIO_DUMP") else { return };
+    let cell = DUMP.get_or_init(|| {
+        let inner = match std::fs::File::create(&path) {
+            Ok(f) => {
+                eprintln!("[webaudio] dumping merged PCM to {} (cap {}s)", path.to_string_lossy(), DUMP_CAP_BYTES / (48_000 * 2 * 2));
+                Some((f, 0usize))
+            }
+            Err(e) => {
+                eprintln!("[webaudio] dump create failed: {e}");
+                None
+            }
+        };
+        Mutex::new(inner)
+    });
+    if let Ok(mut guard) = cell.lock() {
+        if let Some((file, written)) = guard.as_mut() {
+            if *written < DUMP_CAP_BYTES {
+                let _ = file.write_all(pcm);
+                *written += pcm.len();
+                if *written >= DUMP_CAP_BYTES {
+                    eprintln!("[webaudio] PCM dump capped at {} bytes, further audio not archived", DUMP_CAP_BYTES);
+                }
+            }
+        }
+    }
+}
+
 fn broadcast(frame: Vec<u8>) {
     if let Ok(mut c) = clients().lock() {
         c.retain(|tx| match tx.try_send(frame.clone()) {
@@ -170,6 +206,7 @@ pub fn maybe_register(pipeline: &gst::Pipeline, media: bool) -> Option<u32> {
                 frame.extend_from_slice(&flags.to_le_bytes());
                 frame.extend_from_slice(&seq.to_le_bytes());
                 frame.extend_from_slice(&pcm);
+                dump_pcm(&pcm);
                 broadcast(frame);
                 Ok(gst::FlowSuccess::Ok)
             })

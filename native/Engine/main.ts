@@ -17,6 +17,10 @@ import { startWebServer } from './webserver'
 
 const resources=process.env.MACPLAY_RESOURCES!
 const settings=JSON.parse(fs.readFileSync(process.env.MACPLAY_SETTINGS_PATH || path.join(dataDir,'settings.json'),'utf8'))
+// Sizzle hunt: always archive the engine's merged PCM (first ~2 min per run)
+// at audio-dump.pcm — a post-drive diff against the browser symptom splits
+// engine-side corruption from downstream loss without any setup.
+process.env.MACPLAY_AUDIO_DUMP = process.env.MACPLAY_AUDIO_DUMP || path.join(dataDir,'audio-dump.pcm')
 const attempt=process.env.MACPLAY_ATTEMPT||'unknown',began=Date.now()
 const diagnostic=(stage:string,detail:unknown='')=>console.log(JSON.stringify({attempt,elapsedMs:Date.now()-began,stage,detail}))
 const log=(status:string,detail:string='')=>{diagnostic(status,detail);process.stdout.write(JSON.stringify({status,detail})+'\n')}
