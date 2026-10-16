@@ -804,6 +804,7 @@
       try{
         audioCtx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
         masterGain=audioCtx.createGain(); masterGain.connect(audioCtx.destination);
+        loadWorklet();
       }catch(e){ return; }
     }
     var p=audioCtx.resume();
@@ -880,6 +881,79 @@
       pcm:new Int16Array(buffer,20) };
   }
   var audioStreams=new Map(), audioNodes=new Set();
+  // Fork: AudioWorklet ring-buffer player for 48 kHz streams. BufferSource
+  // scheduling lives on the main thread — a WebKit main-thread stall (HUD DOM
+  // updates, touch, video canvas) pushes `next` stale and the chain underruns
+  // (audible click, more likely with the HUD on or while the iPhone renders
+  // its UI). The worklet pulls on the audio render thread instead: the main
+  // thread only shovels decoded PCM into its ring; stalls just deepen the
+  // buffer, never gap it. Non-48k streams (some call/nav rates) keep the
+  // BufferSource fallback below.
+  var workletReady=false, workletLoading=false, streamPlayers={};
+  var WORKLET_SRC=[
+    'class NioPlayer extends AudioWorkletProcessor{',
+    ' constructor(o){super();o=(o&&o.processorOptions)||{};',
+    '  this.cap=Math.floor(sampleRate*2);this.buf=new Float32Array(this.cap*2);',
+    '  this.r=0;this.w=0;this.filled=0;this.depth=0.3;this.running=false;',
+    '  this.underruns=0;this.last=0;',
+    '  this.port.onmessage=(e)=>{var d=e.data;',
+    '   if(d.t==="pcm"){var p=d.pcm,n=(p.length/2)|0;',
+    '    for(var i=0;i<n;i++){var w=this.w*2;this.buf[w]=p[i*2];this.buf[w+1]=p[i*2+1];',
+    '     this.w=(this.w+1)%this.cap;if(this.filled<this.cap)this.filled++;else this.r=(this.r+1)%this.cap;}',
+    '   }else if(d.t==="depth"){this.depth=d.v;}};',
+    ' }',
+    ' process(inp,out){var o=out[0],n=o[0].length,c=o.length;',
+    '  if(!this.running&&this.filled>=this.depth*sampleRate)this.running=true;',
+    '  if(this.running){',
+    '   if(this.filled<n){this.running=false;this.underruns++;',
+    '    if(currentTime-this.last>0.5){this.last=currentTime;this.port.postMessage({t:"underrun",n:this.underruns});}}',
+    '   else{for(var i=0;i<n;i++){var r=this.r*2,l=this.buf[r],rr=this.buf[r+1];',
+    '    for(var ch=0;ch<c;ch++)o[ch][i]=ch===0?l:rr;',
+    '    this.r=(this.r+1)%this.cap;this.filled--;}}}',
+    '  return true;}',
+    '}',
+    'registerProcessor("nio-player",NioPlayer);'
+  ].join('\n');
+  function loadWorklet(){
+    if(workletLoading||!audioCtx.audioWorklet) return;
+    workletLoading=true;
+    var url=URL.createObjectURL(new Blob([WORKLET_SRC],{type:'application/javascript'}));
+    audioCtx.audioWorklet.addModule(url).then(function(){ workletReady=true; })
+      .catch(function(){ workletReady=false; });
+  }
+  function playViaWorklet(frame,kind,j,now){
+    var p=streamPlayers[frame.stream];
+    if(!p){
+      try{
+        var node=new AudioWorkletNode(audioCtx,'nio-player',{numberOfInputs:0,numberOfOutputs:1,
+          outputChannelCount:[2],processorOptions:{stream:frame.stream}});
+        node.port.onmessage=function(ev){
+          var d=ev.data;
+          if(d.t==='underrun'){
+            // Same adaptive rule as the BufferSource path: deepen, re-anchor.
+            audioUnderruns++;
+            j.target=Math.min(1,j.target+0.1); j.healthySince=audioCtx.currentTime;
+            try{ node.port.postMessage({t:'depth',v:j.target}); }catch(e){}
+          }
+        };
+        node.connect(gainFor(frame.stream));
+        // lastDepth left undefined so the send below informs the fresh worklet.
+        p=streamPlayers[frame.stream]={node:node};
+      }catch(e){ workletReady=false; return; }
+    }
+    try{ if(p.lastDepth!==j.target){ p.lastDepth=j.target; p.node.port.postMessage({t:'depth',v:j.target}); } }catch(e){}
+    var ch=frame.channels,n=(frame.pcm.length/ch)|0,f32=new Float32Array(n*2);
+    for(var i=0;i<n;i++){
+      f32[i*2]=frame.pcm[i*ch]/32768;
+      f32[i*2+1]=(ch>1?frame.pcm[i*ch+1]:frame.pcm[i*ch])/32768;
+    }
+    p.node.port.postMessage({t:'pcm',pcm:f32},[f32.buffer]);
+    // 20s without an underrun → reclaim 20ms of latency, back to per-kind floor.
+    if(now-j.healthySince>20&&j.target>j.floor){
+      j.target=Math.max(j.floor,j.target-0.02); j.healthySince=now;
+      try{ p.node.port.postMessage({t:'depth',v:j.target}); }catch(e){}
+    }
+  }
   // WheelPlay-style adaptive jitter buffer: a fixed lead time either crackles
   // (bursts overrun it) or wastes latency. Per-stream target grows when
   // playback underruns and creeps back down while playback stays healthy.
@@ -900,9 +974,10 @@
     // so nothing plays as a burst once unlocked
     if(!audioRunning){ ensureAudio(); showTapHint(); return; }
     var frame=decodeAudioPacket(buffer); if(!frame) return;
-    var now=audioCtx.currentTime;
     var kind=streamKind(frame.stream);
     var j=jitterFor(frame.stream,kind);
+    var now=audioCtx.currentTime;
+    if(workletReady&&frame.rate===audioCtx.sampleRate){ playViaWorklet(frame,kind,j,now); return; }
     var delay=j.target, maxAhead=kind==='media'?delay+1.65:Math.max(0.25,delay+0.15);
     var next=audioStreams.get(frame.stream);
     if(next===undefined) next=now+delay;
