@@ -43,13 +43,6 @@
     color:var(--txt);border:1px solid var(--line);border-radius:10px;
     font-family:ui-monospace,Menlo,monospace;font-size:11px;padding:7px 10px;line-height:1.5;
     display:none;pointer-events:none;white-space:pre;box-shadow:0 2px 10px rgba(0,0,0,.12)}
-  #hudbtn{position:fixed;top:10px;right:10px;z-index:11;background:var(--glass);
-    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
-    color:var(--txt);border:1px solid var(--line);border-radius:999px;
-    font-family:-apple-system,sans-serif;font-size:12px;font-weight:600;padding:6px 14px;
-    cursor:pointer;-webkit-user-select:none;user-select:none;box-shadow:0 2px 10px rgba(0,0,0,.12);
-    transition:opacity .2s ease}
-  #hudbtn.off{opacity:.35}
   /* hint bar */
   #hint{position:fixed;left:0;right:0;bottom:0;text-align:center;color:rgba(255,255,255,.5);
     font-family:-apple-system,sans-serif;font-size:12px;padding:12px;pointer-events:none;
@@ -147,7 +140,6 @@
 <canvas id="c"></canvas>
 <video id="rv" autoplay playsinline muted></video>
 <div id="hud"></div>
-<div id="hudbtn">HUD</div>
 <div id="banner"><span class="bdot"></span><span id="btxt">连接已断开 · 重连中</span></div>
 <div id="hint">触摸屏幕操作 CarPlay · 双击呼出/隐藏控制</div>
 <button id="mutebtn" class="cbtn" title="静音/取消静音">
@@ -186,6 +178,12 @@
     </div>
     <div class="row"><span class="lbl">编码</span>
       <select id="codec" class="rowselect"><option value="h264" selected>H.264</option><option value="hevc">H.265/HEVC</option></select>
+    </div>
+    <div class="row"><span class="lbl">状态浮层</span>
+      <div class="seg" id="hudseg">
+        <button type="button" data-v="on">显示</button>
+        <button type="button" data-v="off">隐藏</button>
+      </div>
     </div>
     <div class="row"><span class="lbl">UI 缩放</span>
       <select id="uiscale" class="rowselect"><option value="75">小 75%</option><option value="85">较小 85%</option>
@@ -255,22 +253,26 @@
   var h264ws=null, videoDecoder=null, decoderConfigured=false;
   var spsPps=null, frameCount=0, bytesCount=0, lastStatTime=Date.now();
   var droppedFrames=0, rttMs=null, audioUnderruns=0;
+  var audioSplices=0, audioLastSample=new Map();
   var hud=document.getElementById('hud');
-  // Fork: HUD visibility toggle — persisted per device; the stats overlays are
-  // dev-facing and users preferred a clean picture.
+  // Fork: HUD visibility lives in Settings > 显示 (状态浮层); persisted per
+  // device. The always-on pill button cluttered the picture.
   var hudHidden=false;
   try{ hudHidden=localStorage.getItem('niohud')==='0'; }catch(e){}
-  var hudBtn=document.getElementById('hudbtn');
-  if(hudBtn){
-    if(hudHidden){ hudBtn.classList.add('off'); hud.style.display='none'; }
-    hudBtn.addEventListener('click',function(e){
-      e.stopPropagation();
-      ensureAudio(); // this click is a valid unlock gesture too
-      hudHidden=!hudHidden;
-      hudBtn.classList.toggle('off',hudHidden);
-      try{ localStorage.setItem('niohud',hudHidden?'0':'1'); }catch(x){}
-      hud.style.display=hudHidden?'none':'block';
-    });
+  var hudSeg=document.getElementById('hudseg');
+  if(hudSeg){
+    var hudBtns=hudSeg.querySelectorAll('button');
+    function setHud(hidden){
+      hudHidden=hidden;
+      try{ localStorage.setItem('niohud',hidden?'0':'1'); }catch(x){}
+      for(var i=0;i<hudBtns.length;i++)
+        hudBtns[i].classList.toggle('active',(hudBtns[i].getAttribute('data-v')==='on')!==hidden);
+      hud.style.display=hidden?'none':'block';
+    }
+    for(var hi=0;hi<hudBtns.length;hi++)(function(b){
+      b.addEventListener('click',function(){ setHud(b.getAttribute('data-v')==='off'); });
+    })(hudBtns[hi]);
+    setHud(hudHidden);
   }
   // Fork: WebRTC direct passthrough state (H.264, LAN host candidates).
   var rv=document.getElementById('rv');
@@ -286,6 +288,7 @@
     if(droppedFrames>0) stats+='  丢帧'+droppedFrames;
     if(rttMs!==null) stats+='  '+rttMs+'ms';
     if(audioUnderruns>0) stats+='  欠载'+audioUnderruns;
+    if(audioSplices>0) stats+='  接缝'+audioSplices;
     hud.textContent=mode+'\n'+fps+' fps  '+kbps+' kbps'+stats+(extra?'\n'+extra:'');
     if(dt>=1){ frameCount=0; bytesCount=0; lastStatTime=now; }
   }
@@ -1009,6 +1012,19 @@
     // so nothing plays as a burst once unlocked
     if(!audioRunning){ ensureAudio(); showTapHint(); return; }
     var frame=decodeAudioPacket(buffer); if(!frame) return;
+    // Splice detector: the engine relay delivers PCM that must be sample-
+    // contiguous within a stream. A big first-vs-last jump between frames
+    // means the 20ms merge or the RTP stitch misaligned — exactly the
+    // amplitude-scaled sizzle reported in dense passages. HUD: 接缝N.
+    var pl=frame.pcm, nch=frame.channels;
+    if(pl.length>=nch){
+      var prevTail=audioLastSample.get(frame.stream);
+      if(prevTail!==undefined){
+        var jump=pl[0]-prevTail;
+        if(jump>12000||jump<-12000) audioSplices++;
+      }
+      audioLastSample.set(frame.stream,pl[pl.length-nch]);
+    }
     var kind=streamKind(frame.stream);
     var j=jitterFor(frame.stream,kind);
     var now=audioCtx.currentTime;
