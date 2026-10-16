@@ -6,9 +6,13 @@ import Darwin
 struct ReleaseVersion: Comparable, Equatable {
     let parts: [Int]
     init?(_ text: String) {
-        guard let range = text.range(of: #"(?<![0-9])\d+\.\d+\.\d+(?![0-9.])"#, options: .regularExpression) else { return nil }
+        // Match a full dotted version — 3 or 4 groups ("V1.2.3", "1.3.1",
+        // "V1.3.1.8920"). Greedy from the first digit run: the old 3-group
+        // pattern skipped past the leading "1." of a 4-segment tag and parsed
+        // V1.3.1.8920 as 3.1.8920.
+        guard let range = text.range(of: #"(?<![0-9.])\d+(?:\.\d+){2,3}(?![0-9.])"#, options: .regularExpression) else { return nil }
         parts = text[range].split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
+        guard parts.count == 3 || parts.count == 4 else { return nil }
     }
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.parts.lexicographicallyPrecedes(rhs.parts) }
     var description: String { parts.map(String.init).joined(separator: ".") }
@@ -97,7 +101,10 @@ struct GitHubRelease: Decodable {
                 let releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
                     .filter { !$0.draft && !$0.prerelease && $0.version != nil }
                 guard let newest = releases.max(by: { $0.version! < $1.version! }), let latest = newest.version,
-                      let current = ReleaseVersion(currentVersion) else { status = "未找到正式发行版"; return }
+                      // Compare against version + build ("1.3.1.8922") — with the
+                      // short version alone ("1.3.1") every 4-segment release tag
+                      // looks newer and the app would always report an update.
+                      let current = ReleaseVersion(build.isEmpty ? currentVersion : currentVersion + "." + build) else { status = "未找到正式发行版"; return }
                 defaults.set(now, forKey: "MacPlay.lastUpdateCheck")
                 guard latest > current else { release = nil; status = "当前已是最新版本"; return }
                 let arm = nativeArm64
@@ -306,10 +313,10 @@ struct MacPlayAboutView: View {
         }
         Section(L("车机浏览器功能")) {
             Text(L("• 无头模式：画面仅通过浏览器串流")).font(.callout)
-            Text(L("• 零转码模式：M1 零 CPU 占用，H.264 直通")).font(.callout)
-            Text(L("• WebCodecs 硬解 / MJPEG 自动回退")).font(.callout)
+            Text(L("• 零转码模式：H.264/H.265 直通，近零 CPU 占用")).font(.callout)
+            Text(L("• WebRTC 直通 / WebCodecs 硬解 / MJPEG 兼容回退")).font(.callout)
             Text(L("• 分流音频混音器 / 浏览器麦克风回传")).font(.callout)
-            Text(L("• Focus 模式 / 显示设置 / 安全边距")).font(.callout)
+            Text(L("• Focus 模式 / 显示设置 / 安全边距 / 断线自动重连")).font(.callout)
             Text(L("在车机浏览器打开 http://<Mac-IP>:8080（HTTPS: https://<Mac-IP>:8443）")).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
         }
         Section(L("致谢")) {
