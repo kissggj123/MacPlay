@@ -1058,7 +1058,7 @@
   }
 
   /* ============ websocket ============ */
-  function send(obj){ if(wsReady) ws.send(JSON.stringify(obj)); }
+  function send(obj){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(obj)); }
   // Spec: lazy toast, same inline-style approach as tapHint. Used by reconnect.
   var toastEl=null;
   function showToast(msg){
@@ -1089,10 +1089,20 @@
     showToast('已重新连接');
   }
   function connect(){
+    // Fork: detach the old socket first — reassigning `ws` while the previous
+    // one is still CONNECTING/OPEN left `wsReady===true` pointing at a
+    // CONNECTING socket, so decoder-config's keyframe request threw
+    // "Still in CONNECTING state" and killed decoder setup after a session
+    // restart.
+    if(ws){ try{ ws.onclose=null; ws.onerror=null; ws.onopen=null; ws.onmessage=null; ws.close(); }catch(e){} }
     var proto=location.protocol==='https:'?'wss':'ws';
     ws=new WebSocket(proto+'://'+location.host+'/touch');
     ws.binaryType='arraybuffer';
-    ws.onopen=function(){ wsReady=true; resetBanner(); };
+    ws.onopen=function(){ wsReady=true; resetBanner();
+      // Fork: a keyframe request dropped during the reconnect gap would leave
+      // a configured decoder waiting forever — re-ask if nothing decoded yet.
+      if(decoderConfigured&&!sawKeyAfterConfig) send({t:'keyframe'});
+    };
     ws.onclose=function(){ wsReady=false; if(banner) banner.classList.add('show'); scheduleReconnect(); };
     ws.onerror=function(){ try{ws.close();}catch(e){} };
     ws.onmessage=function(ev){
