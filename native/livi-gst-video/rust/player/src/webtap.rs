@@ -23,46 +23,6 @@ const BOUNDARY: &str = "macplaymjpeg";
 const FRAME_INTERVAL: Duration = Duration::from_millis(66); // ~15 fps is plenty for a car browser
 const IDLE_POLL: Duration = Duration::from_millis(200);
 
-// Fork: lazy MJPEG. The branch `valve ! videoconvert ! videoscale ! avenc_mjpeg
-// ! appsink` is pure software work (NV12->RGB convert + scale + JPEG encode at
-// up to 60 fps) that ran at full speed even when nobody was watching the
-// 8080/MJPEG route — a constant ~half a core on the receiver while the browser
-// streamed over WebCodecs/WebRTC. The valve starts closed (drop=true), so the
-// leaky queue ahead of it discards frames and the whole branch starves; it
-// opens only while an HTTP client is actually streaming /mjpeg.
-static MJPEG_VALVE: Mutex<Option<gstreamer::Element>> = Mutex::new(None);
-
-fn set_valve_open(open: bool) {
-    let valve = MJPEG_VALVE.lock().unwrap().clone();
-    if let Some(v) = valve {
-        v.set_property("drop", !open);
-        eprintln!(
-            "[webtap] MJPEG valve {}",
-            if open { "open (viewer connected)" } else { "closed (idle)" }
-        );
-    }
-}
-
-/// RAII guard: one /mjpeg stream client. Opens the valve on first viewer,
-/// closes it when the last one walks away (including on early returns).
-static VIEWERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-struct ViewerGuard;
-impl ViewerGuard {
-    fn acquire() -> Self {
-        if VIEWERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-            set_valve_open(true);
-        }
-        ViewerGuard
-    }
-}
-impl Drop for ViewerGuard {
-    fn drop(&mut self) {
-        if VIEWERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
-            set_valve_open(false);
-        }
-    }
-}
-
 /// The configured web-tap port, if enabled.
 pub fn web_port() -> Option<u16> {
     std::env::var("MACPLAY_WEB_PORT").ok()?.parse().ok()
@@ -86,11 +46,6 @@ pub fn maybe_start(pipeline: &gstreamer::Pipeline) {
             return;
         }
     };
-    // Fork: lazy branch control (see ViewerGuard). Absent when the pipeline
-    // fell back to the no-MJPEG description — then this is a no-op.
-    if let Some(v) = pipeline.by_name("mjpegvalve") {
-        *MJPEG_VALVE.lock().unwrap() = Some(v);
-    }
 
     let latest: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -105,12 +60,6 @@ pub fn maybe_start(pipeline: &gstreamer::Pipeline) {
                 loop {
                     match appsink.try_pull_sample(gstreamer::ClockTime::from_seconds(2)) {
                         Some(sample) => {
-                            // No viewer: the valve is closed so samples stop
-                            // arriving anyway, but between a viewer connecting
-                            // and frames re-flowing this skips the map cost.
-                            if VIEWERS.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-                                continue;
-                            }
                             let jpeg = sample
                                 .buffer()
                                 .and_then(|b| b.map_readable().ok().map(|m| m.to_vec()))
@@ -174,8 +123,6 @@ fn handle_client(mut s: std::net::TcpStream, latest: &Arc<Mutex<Vec<u8>>>) {
         return;
     }
     let _ = s.set_write_timeout(Some(Duration::from_secs(10)));
-    // Fork: streaming has begun — keep the MJPEG branch fed until we return.
-    let _viewer = ViewerGuard::acquire();
     loop {
         let jpeg = latest.lock().unwrap().clone();
         if jpeg.is_empty() {

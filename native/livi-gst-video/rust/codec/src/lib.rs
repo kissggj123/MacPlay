@@ -155,7 +155,6 @@ pub fn pipeline_desc(codec: &str, decoder: &str, cal: &str, sink_override: Optio
              t. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream \
              ! {presink}{cal}{sink} \
              t. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream \
-             ! valve name=mjpegvalve drop=true \
              ! videoconvert ! videoscale ! video/x-raw,width=960 \
              ! jpegenc quality=60 ! appsink name=websink emit-signals=false \
              max-buffers=2 drop=true sync=false",
