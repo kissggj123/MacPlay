@@ -320,6 +320,10 @@ enum MacPlayLocalization {
         "登录时启动": ("登入時啟動", "Launch at Login"),
         "复制车机地址": ("複製車機位址", "Copy Car Browser Address"),
         "登录项注册失败": ("登入項註冊失敗", "Could not register login item"),
+        // Car browser addressing (2026-10): mDNS hostname entry + private-subnet hint.
+        "mDNS 主机名（车机需支持 .local 解析，可绕过私网 IP 拦截）": ("mDNS 主機名（車機需支援 .local 解析，可繞過私網 IP 攔截）", "mDNS hostname (car browser must resolve .local; bypasses private-IP blocks)"),
+        ".local 主机名通过 mDNS 在局域网内解析；车机浏览器拦截私网 IP 字面量时可用它打开页面，页面内的触控/音频/HTTPS 会自动跟随主机名。车机需支持 mDNS 解析。": (".local 主機名透過 mDNS 在區網內解析；車機瀏覽器攔截私網 IP 字面量時可用它開啟頁面，頁面內的觸控/音訊/HTTPS 會自動跟隨主機名。車機需支援 mDNS 解析。", "The .local hostname resolves on the LAN via mDNS. When the car browser blocks private-range IP literals, open the page through it — touch, audio and HTTPS inside the page follow the hostname automatically. The car browser must support mDNS resolution."),
+        "⚠️ 当前处于 172.x 私网段（iPhone 热点就是这种网段）。部分车机浏览器会拒绝直接访问私网 IP 地址：优先尝试上方「.local 主机名」地址；车机不支持 mDNS 时，只能改用车机自身热点或家庭 Wi-Fi 组网（网关在 iPhone，Mac 侧无法绕过）。": ("⚠️ 目前處於 172.x 私網段（iPhone 熱點就是這種網段）。部分車機瀏覽器會拒絕直接存取私網 IP 位址：優先嘗試上方「.local 主機名」位址；車機不支援 mDNS 時，只能改用車機自身熱點或家庭 Wi-Fi 組網（閘道在 iPhone，Mac 側無法繞過）。", "⚠️ You are on a 172.x private subnet (iPhone hotspots use one). Some car browsers refuse direct access to private IPs: try the .local hostname address above first; if the car cannot resolve mDNS, switch to the car's own hotspot or a home Wi-Fi (the gateway is the iPhone — nothing can be done from the Mac)."),
     ]
 
     private static let patterns: [(NSRegularExpression, String, String)] = [

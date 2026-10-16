@@ -305,6 +305,18 @@ struct PlaySettings: Codable {
     // Fork: car-browser LAN info + firewall for the webserver port.
     func refreshLanInfo(refreshFirewall: Bool = true) {
         lanAddresses = lanIPv4Addresses()
+        // Fork: mDNS hostname entry. Car browsers that block private-range IP
+        // literals (Tesla-style — iPhone hotspots are 172.20.10.x) can still
+        // open the page through the Mac's .local name: the browser resolves it
+        // on the LAN and the client builds its WebSocket/HTTPS URLs from
+        // location.host, so the whole page follows the name automatically.
+        let host=ProcessInfo.processInfo.hostName
+        if !host.isEmpty && host != "localhost" {
+            let mdns=host.hasSuffix(".local") ? host : host+".local"
+            if !lanAddresses.contains(where:{$0.address==mdns}) {
+                lanAddresses.append((name:"mdns",address:mdns,network:"-",iphoneUSB:false))
+            }
+        }
         // Two live interfaces on one network = hotspot/USB-tether conflict.
         var seen = Set<String>(); lanSubnetConflict = false
         for item in lanAddresses where seen.contains(item.network) { lanSubnetConflict = true }
@@ -1063,9 +1075,13 @@ struct SettingsView: View {
                             if model.lanSubnetConflict {
                                 Text(L("⚠️ 检测到多个网卡在同一网段（iPhone 的 USB 共享网络与 Wi-Fi 热点都是 172.20.10.x）。请使用上面「Wi-Fi」的地址；若仍无法访问，拔掉数据线或关闭 iPhone 的「USB 网络共享」后重试。")).font(.callout).foregroundStyle(.orange)
                             }
+                            if model.lanAddresses.contains(where: { !$0.iphoneUSB && $0.name != "mdns" && $0.address.hasPrefix("172.") }) {
+                                Text(L("⚠️ 当前处于 172.x 私网段（iPhone 热点就是这种网段）。部分车机浏览器会拒绝直接访问私网 IP 地址：优先尝试上方「.local 主机名」地址；车机不支持 mDNS 时，只能改用车机自身热点或家庭 Wi-Fi 组网（网关在 iPhone，Mac 侧无法绕过）。")).font(.callout).foregroundStyle(.orange)
+                            }
                             HStack {
                                 Button(L("刷新地址")) { model.refreshLanInfo() }
                             }
+                            Text(L(".local 主机名通过 mDNS 在局域网内解析；车机浏览器拦截私网 IP 字面量时可用它打开页面，页面内的触控/音频/HTTPS 会自动跟随主机名。车机需支持 mDNS 解析。")).font(.caption).foregroundStyle(.secondary)
                         }
                         .onAppear { model.refreshLanInfo() }
                         .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
@@ -1414,10 +1430,14 @@ struct AddressRow: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { if copied == text { copied = nil } }
     }
     private var interfaceLabel: String {
-        item.iphoneUSB ? L("iPhone USB 网络（与热点同网段，车机无法访问，勿用）") : (item.name == "en0" ? L("Wi-Fi") : item.name)
+        item.iphoneUSB ? L("iPhone USB 网络（与热点同网段，车机无法访问，勿用）")
+            : (item.name == "mdns" ? L("mDNS 主机名（车机需支持 .local 解析，可绕过私网 IP 拦截）")
+            : (item.name == "en0" ? L("Wi-Fi") : item.name))
     }
     private var interfaceColor: Color {
-        item.iphoneUSB ? .orange : (item.name == "en0" ? Color(red: 0.20, green: 0.70, blue: 0.35) : .secondary)
+        item.iphoneUSB ? .orange
+            : (item.name == "mdns" ? Color(red: 0.15, green: 0.45, blue: 0.85)
+            : (item.name == "en0" ? Color(red: 0.20, green: 0.70, blue: 0.35) : .secondary))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
