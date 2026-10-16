@@ -37,6 +37,10 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   .w-main{font-size:16px;font-weight:600;color:var(--txt)}
   .w-sub{font-size:13px;color:var(--txt2);line-height:1.6}
+  /* disconnect page: engine stopped — replaces the frozen last frame */
+  #dcpage{position:fixed;inset:0;z-index:25;display:none;flex-direction:column;align-items:center;
+    justify-content:center;gap:16px;background:var(--bg);font-family:-apple-system,sans-serif;
+    text-align:center;padding:24px}
   /* HUD: light glass + dark monospace */
   #hud{position:fixed;top:10px;left:10px;z-index:10;background:var(--glass);
     -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
@@ -135,6 +139,11 @@
   <div class="spinner"></div>
   <div class="w-main">正在连接 CarPlay…</div>
   <div class="w-sub">请确认 Mac 上的 NIO Play 已连接 iPhone</div>
+</div>
+<div id="dcpage">
+  <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+  <div class="w-main">已断开</div>
+  <div class="w-sub">接收端已停止 · 重新启动后将自动重连</div>
 </div>
 <img id="v" alt="" draggable="false">
 <canvas id="c"></canvas>
@@ -926,19 +935,20 @@
     ' constructor(o){super();o=(o&&o.processorOptions)||{};',
     '  this.cap=Math.floor(sampleRate*2);this.buf=new Float32Array(this.cap*2);',
     '  this.r=0;this.w=0;this.filled=0;this.depth=0.3;this.running=false;',
-    '  this.underruns=0;this.overflows=0;this.last=0;this.lastOv=0;this.fin=0;this.hl=0;this.hr=0;',
+    '  this.underruns=0;this.overflows=0;this.last=0;this.lastOv=0;this.fin=0;this.hl=0;this.hr=0;this.hold=0;',
     '  this.port.onmessage=(e)=>{var d=e.data;',
     '   if(d.t==="pcm"){var p=d.pcm,n=(p.length/2)|0;',
     '    for(var i=0;i<n;i++){var w=this.w*2;this.buf[w]=p[i*2];this.buf[w+1]=p[i*2+1];',
     '     this.w=(this.w+1)%this.cap;if(this.filled<this.cap)this.filled++;else{this.r=(this.r+1)%this.cap;',
     '      this.overflows++;',
     '      if(currentTime-this.lastOv>0.5){this.lastOv=currentTime;this.port.postMessage({t:"overflow",n:this.overflows});}}}',
-    '   }else if(d.t==="depth"){this.depth=d.v;}};',
+    '   }else if(d.t==="depth"){this.depth=d.v;}',
+    '   else if(d.t==="flush"){this.r=0;this.w=0;this.filled=0;this.running=false;this.hold=0;this.fin=0;this.hl=0;this.hr=0;}};',
     ' }',
     ' process(inp,out){var o=out[0],n=o[0].length,c=o.length,k;',
     '  if(!this.running&&this.filled>=this.depth*sampleRate){this.running=true;this.fin=256;}',
     '  if(this.running){',
-    '   if(this.filled<n){this.running=false;this.underruns++;',
+    '   if(this.filled<n){this.running=false;this.underruns++;this.hold=512;',
     '    if(currentTime-this.last>0.5){this.last=currentTime;this.port.postMessage({t:"underrun",n:this.underruns});}}',
     '   else{var fin=this.fin>0?Math.min(this.fin,n):0;this.fin-=fin;',
     '    for(var i=0;i<n;i++){var r=this.r*2,l=this.buf[r],rr=this.buf[r+1];',
@@ -949,10 +959,13 @@
     '  else{',
     '   // Declick (PLC-lite): a hard cut to zero at an underrun boundary is a',
     '   // click whose loudness scales with the signal — hold the last sample',
-    '   // and decay it over ~10ms instead. Masked by music, inaudible in quiet.',
-    '   var hl=this.hl,hr=this.hr;',
-    '   for(k=0;k<n;k++){var g=1-k/512;if(g<0)g=0;g*=g;',
-    '    for(var ch2=0;ch2<c;ch2++)o[ch2][k]=(ch2===0?hl:hr)*g;}}',
+    '   // and decay it monotonically over ~10ms. The decay position must persist',
+    '   // ACROSS blocks: restarting it each 128-sample quantum loops the ramp',
+    '   // forever as a ~375Hz buzz — an endless hum once the engine stops.',
+    '   if(this.hold>0){var hl=this.hl,hr=this.hr,h0=this.hold;',
+    '    for(k=0;k<n;k++){var g=1-(512-h0+k)/512;if(g<0)g=0;g*=g;',
+    '     for(var ch2=0;ch2<c;ch2++)o[ch2][k]=(ch2===0?hl:hr)*g;}',
+    '    this.hold=Math.max(0,this.hold-n);}}',
     '  return true;}',
     '}',
     'registerProcessor("nio-player",NioPlayer);'
@@ -1187,6 +1200,23 @@
     clearTimeout(showToast._t);
     showToast._t=setTimeout(function(){ toastEl.style.opacity='0'; toastEl.style.transform='translateX(-50%) translateY(8px)'; },2000);
   }
+  // Fork: engine stop leaves the worklet holding the last sample — flush every
+  // player to true silence the moment the control socket drops, and after 5s
+  // of failed reconnects swap the frozen last frame for a proper disconnect
+  // page ("已断开"). Reconnect success hides it again.
+  function flushAudio(){
+    for(var k in streamPlayers){ try{ streamPlayers[k].node.port.postMessage({t:'flush'}); }catch(e){} }
+    rsStates.clear(); // resampler history is stale across sessions
+  }
+  var dcTimer=null, dcEl=document.getElementById('dcpage');
+  function armDisconnect(){
+    if(dcTimer) clearTimeout(dcTimer);
+    dcTimer=setTimeout(function(){ if(!wsReady) dcEl.style.display='flex'; },5000);
+  }
+  function hideDisconnect(){
+    if(dcTimer){ clearTimeout(dcTimer); dcTimer=null; }
+    dcEl.style.display='none';
+  }
   // Spec: exponential backoff 2s→5s→10s cap; kick on foreground/online.
   var touchAttempts=0, touchTimer=null;
   function scheduleReconnect(){
@@ -1213,12 +1243,12 @@
     var proto=location.protocol==='https:'?'wss':'ws';
     ws=new WebSocket(proto+'://'+location.host+'/touch');
     ws.binaryType='arraybuffer';
-    ws.onopen=function(){ wsReady=true; resetBanner();
+    ws.onopen=function(){ wsReady=true; resetBanner(); hideDisconnect();
       // Fork: a keyframe request dropped during the reconnect gap would leave
       // a configured decoder waiting forever — re-ask if nothing decoded yet.
       if(decoderConfigured&&!sawKeyAfterConfig) send({t:'keyframe'});
     };
-    ws.onclose=function(){ wsReady=false; if(banner) banner.classList.add('show'); scheduleReconnect(); };
+    ws.onclose=function(){ wsReady=false; if(banner) banner.classList.add('show'); flushAudio(); armDisconnect(); scheduleReconnect(); };
     ws.onerror=function(){ try{ws.close();}catch(e){} };
     ws.onmessage=function(ev){
       if(typeof ev.data!=='string'){ playAudioPacket(ev.data); return; }
