@@ -10,11 +10,12 @@ import Combine
     private weak var statusLineItem: NSMenuItem?
     // Last menu content cache — objectWillChange fires for every @Published
     // change (`logs` alone ticks many times/second while streaming); the menu
-    // only depends on these three.
+    // only depends on these four.
     private var lastMenuRunning=false
     private var lastMenuReceiving=false
     private var lastMenuAddressCount=0
     private var lastMenuAddressKey=""
+    private var lastMenuParamsKey=""
     private var modelObservation: AnyCancellable?
     private var windowObservation: NSObjectProtocol?
     private var terminating = false
@@ -83,6 +84,36 @@ import Combine
         menu.addItem(statusLine)
         statusLineItem=statusLine
         menu.addItem(.separator())
+        // Fork: parameter block + click-to-copy car addresses (tray menu and
+        // Dock right-click share this builder, so both show them).
+        func info(_ title:String) {
+            let item=NSMenuItem(title:L(title),action:nil,keyEquivalent:"")
+            item.isEnabled=false;menu.addItem(item)
+        }
+        let phoneID=model.settings.selectedPhone ?? model.settings.lastPhone
+        if let phone=model.phoneChoices.first(where:{$0.id==phoneID}),model.receivingOrWaiting {
+            info("iPhone：\(phone.name)")
+        } else if !model.usbDevices.isEmpty {
+            info("iPhone：\(model.usbDevices[0])")
+        } else {
+            info("iPhone：未检测到")
+        }
+        info(model.settings.wireless ? "连接：无线 · \(model.settings.ssid)" : "连接：有线 USB")
+        info("画面：\(model.settings.width)×\(model.settings.height) · \(model.settings.fps)fps")
+        info(pnpLine(model))
+        let addresses=model.lanAddresses.filter{$0.iphoneUSB == false}
+        if addresses.isEmpty {
+            info("车机地址等待网络…")
+        }
+        for address in addresses {
+            let prefix = address.name=="en0" ? "Wi-Fi " : (address.name=="mdns" ? ".local " : (address.name.hasPrefix("bridge") ? L("热点")+" " : address.name+" "))
+            let url="https://\(address.address):8443"
+            let item=NSMenuItem(title:prefix+url,action:#selector(copyAddressFromMenu(_:)),keyEquivalent:"")
+            item.target=self;item.representedObject=url
+            item.toolTip=L("点击复制车机地址")
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
         func item(_ title:String,_ action:Selector,enabled:Bool=true) {
             let item=NSMenuItem(title:L(title),action:action,keyEquivalent:"")
             item.target=self;item.isEnabled=enabled;menu.addItem(item)
@@ -93,6 +124,11 @@ import Combine
         if model.running {menu.addItem(volumeItem())}
         item(model.receivingOrWaiting ? "停止接收" : "启动接收",#selector(toggleReceiver))
         menu.addItem(.separator())
+        let pnpItem=NSMenuItem(title:L("即插即用"),action:#selector(togglePlugAndPlay),keyEquivalent:"")
+        pnpItem.target=self
+        pnpItem.state=model.plugAndPlayEnabled ? .on : .off
+        pnpItem.toolTip=L("插入iPhone后自动共享网络并阻止合盖睡眠")
+        menu.addItem(pnpItem)
         let launchItem=NSMenuItem(title:L("登录时启动"),action:#selector(toggleLaunchAtLogin),keyEquivalent:"")
         launchItem.target=self
         launchItem.state=model.launchAtLoginEnabled ? .on : .off
@@ -104,6 +140,16 @@ import Combine
         menu.addItem(.separator())
         item("退出NIO Play",#selector(quit))
         return menu
+    }
+    // 即插即用 summary line; hotspot name is re-read so an externally toggled
+    // sharing state doesn't linger in the menu.
+    private func pnpLine(_ model: PlayModel) -> String {
+        if model.plugAndPlayBusy {return "即插即用：配置中…"}
+        if model.plugAndPlayActive {
+            let name=PlugAndPlayCore.natConfigNow().networkName
+            return name.isEmpty ? "即插即用：已开启" : "即插即用：热点 \(name)"
+        }
+        return model.plugAndPlayEnabled ? "即插即用：待iPhone插入" : "即插即用：未开启"
     }
     // View-based slider sharing the audio tab's exact channel:
     // settings.volume (0-1) + sendAudioCommand() per tick (no file write).
@@ -132,8 +178,22 @@ import Combine
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("https://\(address):8443",forType:.string)
     }
+    @objc private func copyAddressFromMenu(_ sender:NSMenuItem) {
+        guard let url=sender.representedObject as? String else {return}
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url,forType:.string)
+    }
+    @objc private func togglePlugAndPlay() {
+        guard let model else {return}
+        model.setPlugAndPlay(!model.plugAndPlayEnabled)
+    }
     // MARK: NSMenuDelegate
-    func menuWillOpen(_ menu:NSMenu) {statusLineItem?.title=statusTitle()}
+    func menuWillOpen(_ menu:NSMenu) {
+        statusLineItem?.title=statusTitle()
+        // Addresses move when the shared hotspot assigns DHCP; the 10s timer
+        // only runs while the settings window exists, so refresh on open too.
+        model?.refreshLanInfo(refreshFirewall:false)
+    }
     func menuDidClose(_ menu:NSMenu) {model?.persistPreferences()}
 
     private func updateMenusIfNeeded() {
@@ -141,8 +201,15 @@ import Combine
         guard model.running != lastMenuRunning
             || model.receivingOrWaiting != lastMenuReceiving
             || model.lanAddresses.count != lastMenuAddressCount
-            || model.lanAddresses.first{$0.iphoneUSB == false}?.address != lastMenuAddressKey else {return}
+            || model.lanAddresses.first(where:{$0.iphoneUSB == false})?.address != lastMenuAddressKey
+            || paramsKey(model) != lastMenuParamsKey else {return}
         updateMenus()
+    }
+    // Everything the parameter block renders — phone, link, video geometry,
+    // plug-and-play state — so streaming-time @Published churn can't rebuild
+    // the menu unless one of these actually moved.
+    private func paramsKey(_ model: PlayModel) -> String {
+        "\(model.settings.selectedPhone ?? model.settings.lastPhone ?? "")|\(model.usbDevices.joined(separator:","))|\(model.settings.wireless)|\(model.settings.ssid)|\(model.settings.width)x\(model.settings.height)|\(model.settings.fps)|\(model.plugAndPlayEnabled)|\(model.plugAndPlayActive)|\(model.plugAndPlayBusy)|\(model.plugAndPlayStatus)"
     }
     private func updateMenus() {
         if let model {
@@ -150,6 +217,7 @@ import Combine
             lastMenuReceiving=model.receivingOrWaiting
             lastMenuAddressCount=model.lanAddresses.count
             lastMenuAddressKey=model.lanAddresses.first{$0.iphoneUSB == false}?.address ?? ""
+            lastMenuParamsKey=paramsKey(model)
         }
         statusItem?.menu=menu()
     }
@@ -202,6 +270,12 @@ import Combine
     func applicationShouldTerminate(_ sender:NSApplication) -> NSApplication.TerminateReply {
         terminating=true
         model?.stop(restoreMain:false)
+        // 即插即用还开着：先还原共享与休眠设置再退出（弹一次管理员授权）。
+        // 授权被取消时快照保留，下次启动会再次尝试自动恢复。
+        if let model,model.plugAndPlayActive,!model.plugAndPlayBusy {
+            model.revertBeforeQuit { NSApp.reply(toApplicationShouldTerminate:true) }
+            return .terminateLater
+        }
         return .terminateNow
     }
 }
