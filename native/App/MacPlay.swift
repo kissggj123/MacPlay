@@ -236,6 +236,9 @@ struct PlaySettings: Codable {
     // run silently via sudo -S) / "invalid" (stored password no longer works).
     @Published var adminAuthState = "none"
     @Published var adminAuthWorking = false
+    // Remembered System-keychain password (its own password, which can differ
+    // from the admin one) so WiFi reads pre-unlock silently.
+    @Published var systemKeychainRemembered = false
     @Published var keychainWifiCount = 0
     // Fork: connection-tab status card shows session duration.
     @Published var sessionStart: Date?
@@ -396,6 +399,7 @@ struct PlaySettings: Codable {
     // count app-owned WiFi keychain items for the "remembered networks" row.
     func refreshAdminAuthState() {
         refreshKeychainWifiCount()
+        systemKeychainRemembered = AdminAuth.storedKeychainPassword() != nil
         guard let password = AdminAuth.storedPassword() else { adminAuthState = "none"; return }
         guard adminAuthState != "checking" else { return }
         adminAuthState = "checking"
@@ -449,6 +453,10 @@ struct PlaySettings: Codable {
     func removeAdminAuth() {
         AdminAuth.removePassword()
         adminAuthState = "none"
+    }
+    func removeSystemKeychainRemember() {
+        AdminAuth.removeKeychainPassword()
+        systemKeychainRemembered = false
     }
     // Fork: plug-and-play master switch — settings UI and tray menu share it.
     func setPlugAndPlay(_ enabled: Bool) {
@@ -801,10 +809,13 @@ struct PlaySettings: Codable {
             // locked System keychain triggers the SecurityAgent dialog
             // ("security wants to use the System keychain", Deny/Allow, NO
             // "Always Allow") on EVERY read — SecurityAgent cannot be scripted
-            // or remembered. Fix: pre-unlock the keychain ourselves with the
-            // stored admin password (unlock is a no-op when already unlocked
-            // and stays unlocked until reboot) — every later read is then
-            // fully silent.
+            // or remembered. Pre-unlock the keychain with the stored admin
+            // password (no-op when already unlocked, unlocked until reboot)
+            // so the normal case is fully silent. When the System keychain
+            // has its own password (e.g. the Mac password was changed after
+            // setup) the unlock fails quietly with no UI, and the read below
+            // falls back to the native dialog — the old, working behavior;
+            // answering it once per boot keeps later reads silent again.
             //
             // The legacy user-context SecKeychainFindGenericPassword search is
             // GONE on purpose: newer macOS no longer stores Wi-Fi passwords in
@@ -822,17 +833,63 @@ struct PlaySettings: Codable {
                     passwordStatus="管理员授权已失效，请到 设置→连接→授权管理 重新授权，或手动填写密码一次（将永久记住）。"
                     return
                 }
-                let result = await Task.detached { () -> (Int32, String?) in
-                    // Current network's AirPort entry lives in the SYSTEM
-                    // keychain (old ones also pile up in the login keychain).
-                    // Unlock System first (silent, no-op when already
-                    // unlocked), then search both keychains as root.
-                    guard AdminAuth.unlockSystemKeychain(password: stored) else { return (-2, nil) }
-                    return AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w",
-                                                    "-s","AirPort","-a",ssid,
-                                                    NSHomeDirectory() + "/Library/Keychains/login.keychain-db",
-                                                    "/Library/Keychains/System.keychain"], password: stored)
+                // Pass 1 — silent: pre-unlock System with the admin password,
+                // then with the remembered keychain password (they differ when
+                // the login password changed after setup — the keychain keeps
+                // the setup-time one). An already-unlocked keychain makes the
+                // unlock a no-op. Then search both keychains as root.
+                var result = await Task.detached { () -> (Int32, String?, Bool) in
+                    var unlocked = AdminAuth.unlockSystemKeychain(password: stored)
+                    if !unlocked, let remembered = AdminAuth.storedKeychainPassword() {
+                        unlocked = AdminAuth.unlockSystemKeychain(password: remembered)
+                    }
+                    guard unlocked else { return (-2, nil, false) }
+                    let r = AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w",
+                                                     "-s","AirPort","-a",ssid,
+                                                     NSHomeDirectory() + "/Library/Keychains/login.keychain-db",
+                                                     "/Library/Keychains/System.keychain"], password: stored)
+                    return (r.0, r.1, true)
                 }.value
+                // Pass 2 — both passwords failed: ask for the System keychain's
+                // own password in our own dialog (the native dialog cannot be
+                // remembered; ours is validated by unlocking and stored for
+                // good, so it is ever answered once). Skip falls through to the
+                // native-dialog read below.
+                var skipped = false
+                var exhausted = false
+                if result.0 == -2 {
+                    var attempts = 0
+                    while attempts < 3 {
+                        attempts += 1
+                        guard settings.ssid == ssid else { readingPassword=false; passwordStatus="网络已切换，请重新读取密码。"; return }
+                        guard let keychainPassword = AdminAuth.promptSystemKeychainPassword(retry: attempts > 1) else { skipped = true; break }
+                        let retry = await Task.detached { () -> (Int32, String?, Bool) in
+                            guard AdminAuth.unlockSystemKeychain(password: keychainPassword) else { return (-2, nil, false) }
+                            AdminAuth.storeKeychainPassword(keychainPassword)
+                            let r = AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w",
+                                                             "-s","AirPort","-a",ssid,
+                                                             NSHomeDirectory() + "/Library/Keychains/login.keychain-db",
+                                                             "/Library/Keychains/System.keychain"], password: stored)
+                            return (r.0, r.1, true)
+                        }.value
+                        result = retry
+                        if result.2 { break }
+                    }
+                    exhausted = !skipped && !result.2
+                }
+                // Pass 3 — last resort after an explicit skip: the direct read
+                // pops the native "security wants to use the System keychain"
+                // dialog (admin credentials work there even though they don't
+                // match the keychain password — different unlock path).
+                if skipped {
+                    result = await Task.detached { () -> (Int32, String?, Bool) in
+                        let r = AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w",
+                                                         "-s","AirPort","-a",ssid,
+                                                         NSHomeDirectory() + "/Library/Keychains/login.keychain-db",
+                                                         "/Library/Keychains/System.keychain"], password: stored)
+                        return (r.0, r.1, true)
+                    }.value
+                }
                 guard settings.ssid == ssid else { readingPassword=false; passwordStatus="网络已切换，请重新读取密码。"; return }
                 readingPassword=false
                 if result.0 == 0, let password = result.1?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
@@ -840,17 +897,13 @@ struct PlaySettings: Codable {
                     settings.wifiProfiles[ssid]=password
                     writeAppOwnedWifiPassword(ssid: ssid, password: password)
                     persistPreferences()
-                    passwordStatus="已通过管理员授权静默读取并记住密码，之后无需再授权。"
-                } else if result.0 == -2 {
-                    // sudo verified the password, yet unlock failed → the
-                    // System keychain has a custom password (differs from the
-                    // admin password). Nothing we can script; manually filled
-                    // and previously cached passwords still work.
-                    passwordStatus="System钥匙串设置了独立密码（与管理员密码不同），无法静默解锁；请手动填写一次，NIO Play将永久记住。"
+                    passwordStatus="已通过管理员授权读取并记住密码，之后无需再授权（System钥匙串已解锁，本次开机内不再询问）。"
                 } else if result.0 == 44 {
                     passwordStatus="钥匙串中没有该网络密码（新版macOS已不把Wi-Fi密码存入钥匙串）。请手动填写一次，NIO Play将永久记住。"
+                } else if exhausted {
+                    passwordStatus="System钥匙串密码连续3次不正确（它通常等于装机时的开机密码，改过密码后两者不同）。可稍后重试，或手动填写一次（将永久记住）。"
                 } else {
-                    passwordStatus="未获准读取（状态码\(result.0)），可稍后重试，或手动填写一次（将永久记住）。"
+                    passwordStatus="未获准读取（状态码\(result.0)）。可稍后重试（原生认证框中输入管理员密码后点「允许」），或手动填写一次（将永久记住）。"
                 }
                 return
             }
@@ -1322,10 +1375,21 @@ struct SettingsView: View {
                                     .buttonStyle(.link).foregroundStyle(.red)
                                     .disabled(model.adminAuthWorking || model.adminAuthState == "none")
                             }
+                            LabeledContent(L("System钥匙串密码")) {
+                                if model.systemKeychainRemembered {
+                                    Text("✓ " + L("已记住")).foregroundStyle(.green)
+                                } else {
+                                    Text(L("未记住")).foregroundStyle(.secondary)
+                                }
+                            }
+                            if model.systemKeychainRemembered {
+                                Button(L("移除钥匙串密码记忆")) { model.removeSystemKeychainRemember() }
+                                    .buttonStyle(.link).foregroundStyle(.red)
+                            }
                             LabeledContent(L("网络密码记忆")) {
                                 Text(L("已记住 \(model.settings.wifiProfiles.count) 个网络（钥匙串 \(model.keychainWifiCount) 个）"))
                             }
-                            Text(L("管理员密码经系统级加密存入本机钥匙串，用于静默执行即插即用、防火墙放行与读取网络密码等特权操作；密码失效时自动重新询问。网络密码首次读取后自动缓存，之后无需再次授权。")).font(.callout).foregroundStyle(.secondary)
+                            Text(L("管理员密码经系统级加密存入本机钥匙串，用于静默执行即插即用、防火墙放行与读取网络密码等特权操作；密码失效时自动重新询问。System钥匙串密码（与开机密码可能不同）仅在读取网络密码需要时单独询问一次。网络密码首次读取后自动缓存，之后无需再次授权。")).font(.callout).foregroundStyle(.secondary)
                         }
                         .onAppear { model.refreshAdminAuthState() }
                         Section(L("无线网络密码")) {
