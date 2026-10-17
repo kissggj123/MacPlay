@@ -345,6 +345,46 @@ enum MacPlayLocalization {
         "mDNS 主机名（车机需支持 .local 解析，可绕过私网 IP 拦截）": ("mDNS 主機名（車機需支援 .local 解析，可繞過私網 IP 攔截）", "mDNS hostname (car browser must resolve .local; bypasses private-IP blocks)"),
         ".local 主机名通过 mDNS 在局域网内解析；车机浏览器拦截私网 IP 字面量时可用它打开页面，页面内的触控/音频/HTTPS 会自动跟随主机名。车机需支持 mDNS 解析。": (".local 主機名透過 mDNS 在區網內解析；車機瀏覽器攔截私網 IP 字面量時可用它開啟頁面，頁面內的觸控/音訊/HTTPS 會自動跟隨主機名。車機需支援 mDNS 解析。", "The .local hostname resolves on the LAN via mDNS. When the car browser blocks private-range IP literals, open the page through it — touch, audio and HTTPS inside the page follow the hostname automatically. The car browser must support mDNS resolution."),
         "⚠️ 当前处于 172.x 私网段（iPhone 热点就是这种网段）。部分车机浏览器会拒绝直接访问私网 IP 地址：优先尝试上方「.local 主机名」地址；车机不支持 mDNS 时，只能改用车机自身热点或家庭 Wi-Fi 组网（网关在 iPhone，Mac 侧无法绕过）。": ("⚠️ 目前處於 172.x 私網段（iPhone 熱點就是這種網段）。部分車機瀏覽器會拒絕直接存取私網 IP 位址：優先嘗試上方「.local 主機名」位址；車機不支援 mDNS 時，只能改用車機自身熱點或家庭 Wi-Fi 組網（閘道在 iPhone，Mac 側無法繞過）。", "⚠️ You are on a 172.x private subnet (iPhone hotspots use one). Some car browsers refuse direct access to private IPs: try the .local hostname address above first; if the car cannot resolve mDNS, switch to the car's own hotspot or a home Wi-Fi (the gateway is the iPhone — nothing can be done from the Mac)."),
+        // Plug & play (2026-10): CarPlay-box mode + tray parameter block.
+        "即插即用": ("即插即用", "Plug & Play"),
+        "插入iPhone后自动共享网络并阻止合盖睡眠": ("插入iPhone後自動共享網路並阻止合蓋睡眠", "Plug in an iPhone to auto-share the network and block lid-close sleep"),
+        "使用前提：在系统设置 → 通用 → 共享 → 互联网共享中，将「iPhone USB」共享给 Wi-Fi 并配置好热点名称与密码（只需配置一次）。开启后插入 iPhone 自动执行：断开当前 Wi-Fi → 开启互联网共享 → 开启合盖不休眠（熄屏但系统继续运行）；拔出 iPhone 或退出应用时自动还原。开启与还原各需一次管理员授权。": ("使用前提：在系統設定 → 一般 → 共享 → 網際網路共享中，將「iPhone USB」共享給 Wi-Fi 並設定好熱點名稱與密碼（只需設定一次）。開啟後插入 iPhone 自動執行：斷開目前 Wi-Fi → 開啟網際網路共享 → 開啟合蓋不休眠（熄屏但系統繼續執行）；拔出 iPhone 或結束應用程式時自動還原。開啟與還原各需一次管理員授權。", "Prerequisite: in System Settings → General → Sharing → Internet Sharing, share \"iPhone USB\" to Wi-Fi once with your hotspot name and password. When an iPhone is plugged in, this switch then disconnects Wi-Fi, enables Internet Sharing and disables lid-close sleep (screen off, system running); everything reverts on unplug or quit. Each direction asks for one administrator authorization."),
+        "合盖不休眠期间请保持电源连接；还原后合盖恢复正常睡眠。": ("合蓋不休眠期間請保持電源連接；還原後合蓋恢復正常睡眠。", "Keep AC power connected while lid-close sleep is disabled; after restore, closing the lid sleeps normally again."),
+        // Plug & play guided setup (2026-10): checklist + one-click jump into
+        // System Settings for the one-time prerequisite configuration.
+        "引导设置": ("引導設定", "Guided setup"),
+        "热点名称": ("熱點名稱", "Hotspot name"),
+        "共享给 Wi-Fi": ("共享給 Wi-Fi", "Shared to Wi-Fi"),
+        "互联网共享": ("網際網路共享", "Internet Sharing"),
+        "未配置": ("未設定", "Not configured"),
+        "已配置": ("已設定", "Configured"),
+        "未检测到": ("未偵測到", "Not detected"),
+        "当前：开": ("目前：開", "Currently: on"),
+        "当前：关": ("目前：關", "Currently: off"),
+        "打开系统设置 → 互联网共享": ("打開系統設定 → 網際網路共享", "Open System Settings → Internet Sharing"),
+        "重新检测": ("重新偵測", "Re-detect"),
+        "车机访问地址": ("車機存取位址", "Head-unit address"),
+        "第 1 步：点按「打开系统设置 → 互联网共享」，在共享设置中将共享来源选为「iPhone USB」、共享给选为「Wi-Fi」，并设置热点名称与密码（只需配置一次）。第 2 步：回到此处打开上方开关，插入 iPhone 即自动生效。改完点「重新检测」确认状态。": ("第 1 步：點按「打開系統設定 → 網際網路共享」，在共享設定中將共享來源選為「iPhone USB」、共享給選為「Wi-Fi」，並設定熱點名稱與密碼（只需設定一次）。第 2 步：回到此處開啟上方開關，插入 iPhone 即自動生效。改完點「重新偵測」確認狀態。", "Step 1: tap “Open System Settings → Internet Sharing” and share “iPhone USB” to Wi-Fi with your hotspot name and password (one-time setup). Step 2: come back and turn on the switch above — plugging in the iPhone then takes effect automatically. Tap “Re-detect” afterwards to confirm."),
+        "热点": ("熱點", "Hotspot"),
+        "车机地址等待网络…": ("車機位址等待網路…", "Car address waiting for network…"),
+        "点击复制车机地址": ("點擊複製車機位址", "Click to copy the car browser address"),
+        "iPhone：未检测到": ("iPhone：未偵測到", "iPhone: none detected"),
+        "连接：有线 USB": ("連線：有線 USB", "Link: wired USB"),
+        "即插即用：未开启": ("即插即用：未開啟", "Plug & Play: off"),
+        "即插即用：待iPhone插入": ("即插即用：待iPhone插入", "Plug & Play: waiting for iPhone"),
+        "即插即用：配置中…": ("即插即用：設定中…", "Plug & Play: applying…"),
+        "即插即用：已开启": ("即插即用：已開啟", "Plug & Play: on"),
+        "即插即用：正在断开 Wi-Fi…": ("即插即用：正在斷開 Wi-Fi…", "Plug & Play: disconnecting Wi-Fi…"),
+        "即插即用：正在开启网络共享（需要管理员授权）…": ("即插即用：正在開啟網際網路共享（需要管理員授權）…", "Plug & Play: enabling Internet Sharing (asks for admin authorization)…"),
+        "即插即用：未获管理员授权，已取消并尝试恢复 Wi-Fi。": ("即插即用：未獲管理員授權，已取消並嘗試恢復 Wi-Fi。", "Plug & Play: admin authorization declined; cancelled and trying to restore Wi-Fi."),
+        "即插即用已开启，合盖不休眠已开启。": ("即插即用已開啟，合蓋不休眠已開啟。", "Plug & Play is on; lid-close sleep is disabled."),
+        "即插即用：命令已执行，但暂未检测到热点地址，可稍后查看菜单栏或系统设置。": ("即插即用：命令已執行，但暫未偵測到熱點位址，可稍後查看選單列或系統設定。", "Plug & Play: commands ran but no hotspot address yet; check the menu bar or System Settings again shortly."),
+        "即插即用：正在恢复（需要管理员授权）…": ("即插即用：正在還原（需要管理員授權）…", "Plug & Play: restoring (asks for admin authorization)…"),
+        "即插即用已恢复：互联网共享与合盖不休眠已还原。": ("即插即用已還原：網際網路共享與合蓋不休眠已復原。", "Plug & Play restored: Internet Sharing and lid-close sleep are back to their previous state."),
+        "即插即用：已取消恢复授权；请手动关闭互联网共享，并执行 pmset -a disablesleep 0。": ("即插即用：已取消還原授權；請手動關閉網際網路共享，並執行 pmset -a disablesleep 0。", "Plug & Play: restore authorization declined. Turn off Internet Sharing manually and run pmset -a disablesleep 0."),
+        "即插即用：恢复命令执行失败，请检查互联网共享与 pmset disablesleep 状态。": ("即插即用：還原命令執行失敗，請檢查網際網路共享與 pmset disablesleep 狀態。", "Plug & Play: restore command failed. Check Internet Sharing and the pmset disablesleep state."),
+        "检测到上次未完成的即插即用状态，正在恢复系统设置…": ("偵測到上次未完成的即插即用狀態，正在還原系統設定…", "An unfinished Plug & Play state was left behind; restoring system settings…"),
+        "即插即用：iPhone 已拔出，6 秒后恢复系统设置…": ("即插即用：iPhone 已拔出，6 秒後還原系統設定…", "Plug & Play: iPhone unplugged; restoring settings in 6 s…"),
     ]
 
     private static let patterns: [(NSRegularExpression, String, String)] = [
@@ -357,6 +397,11 @@ enum MacPlayLocalization {
         (try! NSRegularExpression(pattern: "^(内建显示器|外接显示器) · (\\d+)×(\\d+)像素 · (\\d+)Hz · (\\d+)×(\\d+)mm$"), "$1 · $2×$3像素 · $4Hz · $5×$6mm", "$1 · $2×$3 pixels · $4Hz · $5×$6mm"),
         (try! NSRegularExpression(pattern: "^会话 (\\d+) 分钟$"), "工作階段 $1 分鐘", "Session $1 min"),
         (try! NSRegularExpression(pattern: "^● 接收中 · (\\d+)分钟$"), "● 接收中 · $1分鐘", "● Receiving · $1 min"),
+        (try! NSRegularExpression(pattern: "^iPhone：(.+)$"), "iPhone：$1", "iPhone: $1"),
+        (try! NSRegularExpression(pattern: "^连接：无线 · (.+)$"), "連線：無線 · $1", "Link: Wi-Fi · $1"),
+        (try! NSRegularExpression(pattern: "^画面：(\\d+)×(\\d+) · (\\d+)fps$"), "畫面：$1×$2 · $3fps", "Video: $1×$2 · $3fps"),
+        (try! NSRegularExpression(pattern: "^即插即用：热点 (.+)$"), "即插即用：熱點 $1", "Plug & Play: hotspot $1"),
+        (try! NSRegularExpression(pattern: "^即插即用已开启：热点「(.+)」，合盖不休眠已开启$"), "即插即用已開啟：熱點「$1」，合蓋不休眠已開啟", "Plug & Play on: hotspot “$1”; lid-close sleep disabled"),
     ]
 }
 

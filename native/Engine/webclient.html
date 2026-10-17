@@ -1446,14 +1446,20 @@
   /* ============ safe area margins (WheelPlay-style) ============ */
   var margins={top:0,bottom:0,left:0,right:0};
   function applyMargins(){
-    var mt=margins.top+'vh', mb=margins.bottom+'vh',
-        ml=margins.left+'vw', mr=margins.right+'vw';
+    // Fork: px from innerWidth/innerHeight, not vw/vh units — some car WebViews
+    // freeze the viewport units after a window-mode change (split-screen →
+    // fullscreen) while innerWidth/innerHeight do update, so the stream would
+    // stay pinned at the old half-window size.
+    var vw=window.innerWidth, vh=window.innerHeight;
+    var mt=Math.round(vh*margins.top/100), mb=Math.round(vh*margins.bottom/100),
+        ml=Math.round(vw*margins.left/100), mr=Math.round(vw*margins.right/100);
     [img,canvas].forEach(function(el){
-      el.style.top=mt; el.style.bottom=mb;
-      el.style.left=ml; el.style.right=mr;
-      el.style.width='calc(100vw - '+ml+' - '+mr+')';
-      el.style.height='calc(100vh - '+mt+' - '+mb+')';
+      el.style.top=mt+'px'; el.style.bottom=mb+'px';
+      el.style.left=ml+'px'; el.style.right=mr+'px';
+      el.style.width=(vw-ml-mr)+'px';
+      el.style.height=(vh-mt-mb)+'px';
     });
+    if(rv&&rv.style){ rv.style.width=vw+'px'; rv.style.height=vh+'px'; }
     rectCache.rect=null;
   }
   ['top','bottom','left','right'].forEach(function(k){
@@ -1465,7 +1471,8 @@
     try{ var sv=localStorage.getItem('macplay-margin-'+k); if(sv!==null){ el.value=sv; v.textContent=sv+'%'; margins[k]=+sv; } }catch(e){}
   });
   applyMargins();
-  window.addEventListener('resize',function(){ rectCache.rect=null; });
+  function syncViewportSize(){ applyMargins(); }
+  window.addEventListener('resize',function(){ rectCache.rect=null; syncViewportSize(); maybeRefit(); });
 
   /* ============ focus mode ============ */
   focusbtn.addEventListener('click',function(e){
@@ -1510,7 +1517,13 @@
     showToast('此浏览器不支持全屏接口，已进入沉浸模式');
   });
   ['fullscreenchange','webkitfullscreenchange'].forEach(function(ev){
-    document.addEventListener(ev,function(){ fsbtn.classList.toggle('active',fsActive()); });
+    document.addEventListener(ev,function(){
+      fsbtn.classList.toggle('active',fsActive());
+      // Fork: car WebViews may switch window mode without firing resize —
+      // re-pin the media box in px and re-fit if the window grew a lot.
+      syncViewportSize();
+      setTimeout(maybeRefit,300);
+    });
   });
 
   /* ============ settings panel ============ */
@@ -1543,10 +1556,12 @@
   // because changing it renegotiates the CarPlay session (visible restart).
   // Resizes after that are pure CSS — no renegotiation, no hiccup.
   var sentFit=false, probeAnswered=null;
-  // Fork: smart remembered resolution. First visit on a browser defaults to
-  // 1080P (instead of raw window pixels); the negotiated size is remembered in
-  // localStorage per browser, so the next session reuses it instantly. Only a
-  // big window change (>15%) renegotiates. Wired sessions never switch.
+  // Fork: last reported window pixels + time — feeds maybeRefit (big window
+  // changes re-report even after the initial fit, and even on wired sessions
+  // where the live switch is vetoed: the engine still persists the new size
+  // for the next receiver start, so a full-screen window finally gets a
+  // full-screen stream after restarting the receiver).
+  var lastFitW=0, lastFitH=0, lastFitAt=0;
   function maybeSendFit(answer){
     if(sentFit||answer===false) return;
     var dpr=window.devicePixelRatio||1;
@@ -1564,8 +1579,29 @@
     else { w=1920; h=1080; }
     if(saved&&(Math.abs(cw-saved.w)/saved.w>0.15||Math.abs(ch-saved.h)/saved.h>0.15)){ w=cw; h=ch; }
     sentFit=true;
+    lastFitW=w; lastFitH=h; lastFitAt=Date.now();
     try{ localStorage.setItem('nioDisplay',JSON.stringify({w:w,h:h})); }catch(e){}
     send({t:'display', width:w, height:h, matchWindow:true, widthMm:getWidthMm()});
+  }
+  // Fork: re-fit on a BIG window change (>15%) after load — e.g. the head unit
+  // promotes the browser from a half-screen window to fullscreen. Throttled to
+  // one report per 5 s so toolbar show/hide jitter never spams renegotiations.
+  // Runs regardless of the wired veto: displayResult will honestly say
+  // "saved for next start" and the engine persists the new pixels.
+  function maybeRefit(){
+    var dpr=window.devicePixelRatio||1;
+    var cw=Math.round(window.innerWidth*dpr), ch=Math.round(window.innerHeight*dpr);
+    if(cw<320||ch<240) return;
+    var now=Date.now();
+    if(now-lastFitAt<5000) return;
+    // Baseline: the last reported size, or (wired sessions never reported at
+    // load — probe veto short-circuits maybeSendFit) the remembered size.
+    var baseW=lastFitW, baseH=lastFitH;
+    if(!baseW){ try{ var s=JSON.parse(localStorage.getItem('nioDisplay')||'null'); if(s&&s.w>0){baseW=s.w;baseH=s.h;} }catch(e){} }
+    if(baseW>0&&Math.abs(cw-baseW)/baseW<=0.15&&Math.abs(ch-baseH)/baseH<=0.15) return;
+    lastFitW=cw; lastFitH=ch; lastFitAt=now; sentFit=true;
+    try{ localStorage.setItem('nioDisplay',JSON.stringify({w:cw,h:ch})); }catch(e){}
+    send({t:'display', width:cw, height:ch, matchWindow:true, widthMm:getWidthMm()});
   }
   // Fork: the car browser IS the display — it owns the advertised physical
   // width (iOS picks its CarPlay layout from physical-size brackets). Stored

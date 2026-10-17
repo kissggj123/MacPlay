@@ -124,6 +124,10 @@ struct PlaySettings: Codable {
     var backgroundEnabled: Bool? = nil
     var launchAtLogin: Bool? = nil
     var preventSleepWhenConnected: Bool? = nil
+    // Fork: 即插即用（CarPlay-box mode）— on iPhone plug-in: disconnect Wi-Fi,
+    // enable macOS Internet Sharing (iPhone-USB → pre-configured Wi-Fi hotspot)
+    // and disable lid-close sleep; reverts on unplug/toggle-off/quit.
+    var plugAndPlay: Bool? = nil
     var mjpegFallback: Bool? = nil
     var headless: Bool? = nil
     var zeroTranscode: Bool? = nil
@@ -214,6 +218,19 @@ struct PlaySettings: Codable {
     @Published var firewallWorking = false
     // Fork: firewall card shows a green check once nothing needs allowing.
     @Published var firewallAllowed = false
+    // Fork: plug-and-play live state for the tray menu + settings UI. Written
+    // by PlugAndPlayController; @Published keeps the menu cache in sync.
+    @Published var plugAndPlayActive = false
+    @Published var plugAndPlayBusy = false
+    @Published var plugAndPlayStatus = ""
+    var plugAndPlay: PlugAndPlayController!
+    // Fork: plug-and-play guided setup — live view of the prerequisite config
+    // (hotspot name / Wi-Fi share segment / sharing switch) read from nat.plist,
+    // plus the bridge gateway address while sharing is up. Refreshed when the
+    // controller activates/reverts (pnpRefreshLanInfo) and by the re-detect
+    // button in the guide UI.
+    @Published var pnpGuideConfig = PlugAndPlayCore.natConfigNow()
+    @Published var pnpGuideBridgeIP = PlugAndPlayCore.sharedBridgeIPv4()
     // Fork: connection-tab status card shows session duration.
     @Published var sessionStart: Date?
     private let locationManager = CLLocationManager()
@@ -239,7 +256,9 @@ struct PlaySettings: Codable {
         if ![30,60,90,120].contains(settings.fps) { settings.fps=60 }
         if settings.resolution == "1920x720" { settings.resolution="custom" }
         if settings.resolution == "3840x2160" { settings.resolution="native" }
+        plugAndPlay=PlugAndPlayController(host:self)
         configureRemoteCommands(); refreshHardware(); installBundledCredentials(); updateResolution(); inspectCredentials(); detectNetwork(); refreshUSB()
+        plugAndPlay.restoreIfStaleIfNeeded()
         NotificationCenter.default.addObserver(forName:NSApplication.didChangeScreenParametersNotification,object:nil,queue:.main){[weak self] _ in Task { @MainActor in self?.refreshHardware(); self?.updateResolution() }}
         usbTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshUSB() }
@@ -353,6 +372,26 @@ struct PlaySettings: Codable {
                 firewallAllowed = false
             }
         }
+    }
+    // Fork: PlugAndPlayHost — the controller reads/writes these; lan refresh
+    // after activation/revert feeds the tray menu's address items.
+    var plugAndPlayEnabled: Bool { settings.plugAndPlay == true }
+    var savedWifiPasswords: [String: String] { settings.wifiProfiles }
+    func pnpRefreshLanInfo() { refreshLanInfo(refreshFirewall: false); refreshPnpGuide() }
+    // Fork: re-read the nat.plist prerequisite state + bridge gateway for the
+    // guided-setup card (user just configured sharing in System Settings).
+    func refreshPnpGuide() {
+        pnpGuideConfig = PlugAndPlayCore.natConfigNow()
+        pnpGuideBridgeIP = PlugAndPlayCore.sharedBridgeIPv4()
+    }
+    // Fork: plug-and-play master switch — settings UI and tray menu share it.
+    func setPlugAndPlay(_ enabled: Bool) {
+        settings.plugAndPlay=enabled;persistPreferences()
+        if enabled {plugAndPlay.enableRequested(hasPhone:!connectedUSBIDs.isEmpty)}
+        else {plugAndPlay.disableRequested()}
+    }
+    func revertBeforeQuit(completion: @escaping () -> Void) {
+        plugAndPlay.revertBeforeQuit(completion: completion)
     }
     func allowFirewallForReceiver() {
         guard let bin = receiverBinaryPath(), !firewallWorking else { return }
@@ -746,6 +785,8 @@ struct PlaySettings: Codable {
         phoneChoices=choices
         let added=serials.subtracting(connectedUSBIDs)
         connectedUSBIDs=serials
+        // Fork: plug-and-play trigger — act on plug-in/absence transitions only.
+        plugAndPlay.usbPresenceChanged(hasPhone: !serials.isEmpty)
         if changed {usbError="";usbStage=running ? "等待USB握手，请保持iPhone解锁" : "接收服务未启动"}
         startForUSBIfNeeded(added)
     }
@@ -1024,6 +1065,8 @@ struct PlaySettings: Codable {
     }
 }
 
+extension PlayModel: PlugAndPlayHost {}
+
 struct LogConsoleView: View {
     @ObservedObject var model: PlayModel
     var body: some View {
@@ -1179,6 +1222,46 @@ struct SettingsView: View {
                             Text(L("连接期间阻止系统休眠（含合盖，需连接电源），显示器仍可正常熄屏。")).font(.callout).foregroundStyle(.secondary)
                             Text(L("为不支持硬解直通的老旧车机浏览器保留8080端口的兼容画面。关闭后该通道无视频，可降低接收端CPU占用。")).font(.callout).foregroundStyle(.secondary)
                             Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要NIO Play保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Section(L("即插即用")) {
+                            Toggle(L("插入iPhone后自动共享网络并阻止合盖睡眠"),isOn:Binding(get:{model.settings.plugAndPlay ?? false},set:{model.setPlugAndPlay($0)}))
+                            if !model.plugAndPlayStatus.isEmpty {
+                                Text(L(model.plugAndPlayStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
+                            // Fork: guided setup — checklist of the one-time
+                            // prerequisites read from nat.plist + one-click jumps
+                            // into the right System Settings pane for manual
+                            // configuration.
+                            DisclosureGroup(L("引导设置")) {
+                                VStack(alignment:.leading,spacing:6) {
+                                    LabeledContent(L("热点名称")) {
+                                        Text(L(model.pnpGuideConfig.networkName.isEmpty ? "未配置" : model.pnpGuideConfig.networkName))
+                                            .foregroundStyle(model.pnpGuideConfig.networkName.isEmpty ? Color.orange : Color.green)
+                                    }
+                                    LabeledContent(L("共享给 Wi-Fi")) {
+                                        Text(L(model.pnpGuideConfig.hasAirport ? "已配置" : "未检测到"))
+                                            .foregroundStyle(model.pnpGuideConfig.hasAirport ? Color.green : Color.orange)
+                                    }
+                                    LabeledContent(L("互联网共享")) {
+                                        Text(L(model.pnpGuideConfig.enabled ? "当前：开" : "当前：关"))
+                                    }
+                                    if let bridge = model.pnpGuideBridgeIP {
+                                        LabeledContent(L("车机访问地址")) {
+                                            Text("https://\(bridge):8443").textSelection(.enabled)
+                                        }
+                                    }
+                                    HStack {
+                                        Button(L("打开系统设置 → 互联网共享")) {
+                                            NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preferences.sharing?internetSharing")!)
+                                        }
+                                        Button(L("重新检测")) { model.refreshPnpGuide() }
+                                    }
+                                    Text(L("第 1 步：点按「打开系统设置 → 互联网共享」，在共享设置中将共享来源选为「iPhone USB」、共享给选为「Wi-Fi」，并设置热点名称与密码（只需配置一次）。第 2 步：回到此处打开上方开关，插入 iPhone 即自动生效。改完点「重新检测」确认状态。")).font(.callout).foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical,2)
+                            }
+                            Text(L("使用前提：在系统设置 → 通用 → 共享 → 互联网共享中，将「iPhone USB」共享给 Wi-Fi 并配置好热点名称与密码（只需配置一次）。开启后插入 iPhone 自动执行：断开当前 Wi-Fi → 开启互联网共享 → 开启合盖不休眠（熄屏但系统继续运行）；拔出 iPhone 或退出应用时自动还原。开启与还原各需一次管理员授权。")).font(.callout).foregroundStyle(.secondary)
+                            Text(L("合盖不休眠期间请保持电源连接；还原后合盖恢复正常睡眠。")).font(.callout).foregroundStyle(.secondary)
                         }
                         if !model.settings.wireless {Section(L("USB直连")) {
                             LabeledContent(L("设备"),value:L(model.usbStatus))
