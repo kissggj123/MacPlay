@@ -1,5 +1,9 @@
 import Foundation
 
+// PlugAndPlay.swift 的密码弹窗使用主工程的 L() 本地化函数；单测环境无
+// Localization.swift，用恒等 stub 让文件可独立编译。
+func L(_ text: String) -> String { text }
+
 @main struct PlugAndPlayPolicyTests {
     static func main() {
         // nat.plist 解析：主开关 + AirPort 热点段（真实机器上的字段形态）。

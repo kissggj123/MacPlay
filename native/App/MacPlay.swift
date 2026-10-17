@@ -231,6 +231,12 @@ struct PlaySettings: Codable {
     // button in the guide UI.
     @Published var pnpGuideConfig = PlugAndPlayCore.natConfigNow()
     @Published var pnpGuideBridgeIP = PlugAndPlayCore.sharedBridgeIPv4()
+    // Fork: authorization-management section state. adminAuthState: "none" (no
+    // stored credential) / "checking" / "ok" (verified — privileged operations
+    // run silently via sudo -S) / "invalid" (stored password no longer works).
+    @Published var adminAuthState = "none"
+    @Published var adminAuthWorking = false
+    @Published var keychainWifiCount = 0
     // Fork: connection-tab status card shows session duration.
     @Published var sessionStart: Date?
     private let locationManager = CLLocationManager()
@@ -384,6 +390,65 @@ struct PlaySettings: Codable {
         pnpGuideConfig = PlugAndPlayCore.natConfigNow()
         pnpGuideBridgeIP = PlugAndPlayCore.sharedBridgeIPv4()
     }
+    // Fork: authorization management (设置 → 连接 → 授权管理). Verify the stored
+    // credential in the background so the section shows live validity; also
+    // count app-owned WiFi keychain items for the "remembered networks" row.
+    func refreshAdminAuthState() {
+        refreshKeychainWifiCount()
+        guard let password = AdminAuth.storedPassword() else { adminAuthState = "none"; return }
+        guard adminAuthState != "checking" else { return }
+        adminAuthState = "checking"
+        Task {
+            let ok = await Task.detached { AdminAuth.verifyPassword(password) }.value
+            adminAuthState = ok ? "ok" : "invalid"
+        }
+    }
+    func refreshKeychainWifiCount() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "NIO Play WiFi",
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true,
+        ]
+        var items: CFTypeRef?
+        keychainWifiCount = (SecItemCopyMatching(query as CFDictionary, &items) == errSecSuccess
+            ? (items as? [[String: Any]] ?? []).count : 0)
+    }
+    /// force=true always prompts (重新授权 — replace the stored credential);
+    /// force=false repairs: silent no-op when the stored password still works,
+    /// otherwise drops it and prompts (修复授权).
+    func authorizeAdmin(force: Bool) {
+        guard !adminAuthWorking else { return }
+        adminAuthWorking = true
+        Task { @MainActor in
+            defer { adminAuthWorking = false }
+            if !force, let stored = AdminAuth.storedPassword() {
+                adminAuthState = "checking"
+                if await Task.detached { AdminAuth.verifyPassword(stored) }.value {
+                    adminAuthState = "ok"
+                    return
+                }
+                AdminAuth.removePassword()
+            }
+            for attempt in 0..<3 {
+                guard let password = AdminAuth.promptPassword(retry: attempt > 0) else { break }
+                guard await Task.detached { AdminAuth.verifyPassword(password) }.value else { continue }
+                AdminAuth.storePassword(password)
+                adminAuthState = "ok"
+                // Bonus: with a fresh credential the AirPort read is silent —
+                // auto-fill the current network's password if it's still missing.
+                if settings.wireless, !settings.ssid.isEmpty, settings.password.isEmpty {
+                    readSavedNetworkPassword()
+                }
+                return
+            }
+            adminAuthState = AdminAuth.storedPassword() == nil ? "none" : "invalid"
+        }
+    }
+    func removeAdminAuth() {
+        AdminAuth.removePassword()
+        adminAuthState = "none"
+    }
     // Fork: plug-and-play master switch — settings UI and tray menu share it.
     func setPlugAndPlay(_ enabled: Bool) {
         settings.plugAndPlay=enabled;persistPreferences()
@@ -398,18 +463,26 @@ struct PlaySettings: Codable {
         firewallWorking = true
         firewallState = L("正在请求管理员权限…")
         DispatchQueue.global().async {
-            // socketfilterfw needs admin; osascript shows the system password dialog.
-            let script = "do shell script \"/usr/libexec/ApplicationFirewall/socketfilterfw --add " +
-                bin.replacingOccurrences(of: "\"", with: "\\\"") +
-                "\" with administrator privileges"
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            task.arguments = ["-e", script]
-            task.standardOutput = Pipe()
-            task.standardError = Pipe()
-            try? task.run()
-            task.waitUntilExit()
-            let ok = task.terminationStatus == 0
+            // Fork: keychain-first — when the plug-and-play admin credential is
+            // stored, socketfilterfw runs via sudo -S with no password dialog;
+            // otherwise fall back to the osascript system prompt.
+            let command = "/usr/libexec/ApplicationFirewall/socketfilterfw --add " + bin
+            var ok = false
+            if let status = AdminAuth.runScript(command) {
+                ok = status == 0
+            } else {
+                let script = "do shell script \"" +
+                    command.replacingOccurrences(of: "\"", with: "\\\"") +
+                    "\" with administrator privileges"
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                task.arguments = ["-e", script]
+                task.standardOutput = Pipe()
+                task.standardError = Pipe()
+                try? task.run()
+                task.waitUntilExit()
+                ok = task.terminationStatus == 0
+            }
             DispatchQueue.main.async {
                 self.firewallWorking = false
                 self.refreshLanInfo()
@@ -427,6 +500,9 @@ struct PlaySettings: Codable {
         persistPreferences()
     }
     func showCarPlayWindow() {
+        // Headless mode never creates a local window — the engine's show
+        // command is a no-op there; don't activate the faceless receiver.
+        guard settings.headless != true else {return}
         guard let task=process,task.isRunning else {return}
         MacPlayApplicationDelegate.shared?.prepareCarPlayPresentation()
         if let receiver=NSRunningApplication(processIdentifier:task.processIdentifier) {
@@ -702,6 +778,48 @@ struct PlaySettings: Codable {
         readingPassword=true
         passwordStatus="正在读取钥匙串；系统弹出授权时请点击「始终允许」，之后不再询问。"
         Task {
+            // Fork: admin-credential fast path — read the AirPort item as root
+            // via the security tool (argv form; no shell quoting). Root context
+            // reads the user's login keychain without the per-app ACL
+            // challenge, so a stored credential makes this fully silent. A
+            // stale credential is detected via sudo verification and cleared;
+            // "not found" (exit 44) falls through to the legacy user-context
+            // search which also covers iCloud-synced "Local Items". Any other
+            // failure (denied/cancelled) bails out with a hint so the user
+            // never sees two password dialogs in a row.
+            if let stored = AdminAuth.storedPassword(), !ssid.hasPrefix("-") {
+                let keychainPath = NSHomeDirectory() + "/Library/Keychains/login.keychain-db"
+                let verified = await Task.detached { AdminAuth.verifyPassword(stored) }.value
+                guard settings.ssid == ssid else { readingPassword=false; passwordStatus="网络已切换，请重新读取密码。"; return }
+                if !verified {
+                    AdminAuth.removePassword()
+                    adminAuthState = "none"
+                    // Fall through to the legacy flow: the system keychain
+                    // dialog below accepts the CURRENT password and works for
+                    // standard (non-admin) accounts too.
+                } else {
+                    let result = await Task.detached { () -> (Int32, String?) in
+                        AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w","-s","AirPort","-a",ssid,keychainPath], password: stored)
+                    }.value
+                    guard settings.ssid == ssid else { readingPassword=false; passwordStatus="网络已切换，请重新读取密码。"; return }
+                    if result.0 == 0, let password = result.1?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
+                        settings.password=password
+                        settings.wifiProfiles[ssid]=password
+                        writeAppOwnedWifiPassword(ssid: ssid, password: password)
+                        persistPreferences()
+                        readingPassword=false
+                        passwordStatus="已通过管理员授权静默读取并记住密码，之后无需再授权。"
+                        return
+                    }
+                    if result.0 != 44 {
+                        readingPassword=false
+                        passwordStatus="未获准读取（可稍后重试，或手动填写一次即可永久记住）。"
+                        return
+                    }
+                    // 44: not in login.keychain-db → legacy search may still find
+                    // it in iCloud Local Items.
+                }
+            }
             let result=await Task.detached { () -> (OSStatus, String?) in
                 var length: UInt32=0
                 var bytes: UnsafeMutableRawPointer?
@@ -1174,6 +1292,36 @@ struct SettingsView: View {
                             }
                             Text(L("局域网需放行：TCP 8080（浏览器画面/触控/音频）。iPhone 直连 CarPlay 使用系统 usbmuxd/蓝牙/Wi-Fi，走 NIO Play 自身通道。")).font(.callout).foregroundStyle(.secondary)
                         }
+                        // Fork: authorization management — live credential status,
+                        // re-authorize / repair / remove, and remembered-network
+                        // counts. One stored credential silences every password
+                        // dialog (plug-and-play, firewall allow, WiFi read).
+                        Section(L("授权管理")) {
+                            LabeledContent(L("管理员授权")) {
+                                switch model.adminAuthState {
+                                case "ok": Text("✓ " + L("已授权")).foregroundStyle(.green)
+                                case "invalid": Text(L("密码已失效")).foregroundStyle(.orange)
+                                case "checking": Text(L("正在验证…")).foregroundStyle(.secondary)
+                                default: Text(L("未授权")).foregroundStyle(.secondary)
+                                }
+                            }
+                            HStack {
+                                Button(model.adminAuthWorking ? L("正在验证…") : (model.adminAuthState == "ok" ? L("重新授权") : L("立即授权"))) {
+                                    model.authorizeAdmin(force: true)
+                                }
+                                .disabled(model.adminAuthWorking)
+                                Button(L("修复授权")) { model.authorizeAdmin(force: false) }
+                                    .disabled(model.adminAuthWorking || model.adminAuthState == "none")
+                                Button(L("移除授权")) { model.removeAdminAuth() }
+                                    .buttonStyle(.link).foregroundStyle(.red)
+                                    .disabled(model.adminAuthWorking || model.adminAuthState == "none")
+                            }
+                            LabeledContent(L("网络密码记忆")) {
+                                Text(L("已记住 \(model.settings.wifiProfiles.count) 个网络（钥匙串 \(model.keychainWifiCount) 个）"))
+                            }
+                            Text(L("管理员密码经系统级加密存入本机钥匙串，用于静默执行即插即用、防火墙放行与读取网络密码等特权操作；密码失效时自动重新询问。网络密码首次读取后自动缓存，之后无需再次授权。")).font(.callout).foregroundStyle(.secondary)
+                        }
+                        .onAppear { model.refreshAdminAuthState() }
                         Section(L("无线网络密码")) {
                             if model.settings.wifiProfiles.isEmpty {
                                 Text(L("尚未保存网络密码")).foregroundStyle(.secondary)
