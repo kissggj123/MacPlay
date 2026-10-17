@@ -59,6 +59,59 @@ enum AdminAuth {
         SecItemDelete(query as CFDictionary)
     }
 
+    // The System keychain has its OWN password (ships as the setup-time admin
+    // password; later login-password changes do NOT update it) and re-locks
+    // after sleep (lock-on-sleep=300s). `security unlock-keychain -p` is the
+    // only scriptable unlock — the native "security wants to use the System
+    // keychain" admin-auth dialog cannot be scripted or remembered. When the
+    // admin password doesn't match the keychain, we ask once for the keychain
+    // password itself, validate it by actually unlocking, and remember it
+    // here (device only) so every later read pre-unlocks silently.
+    static let keychainService = "NIO Play SystemKeychain"
+    private static let keychainAccount = "system"
+
+    static func storedKeychainPassword() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let password = String(data: data, encoding: .utf8),
+              !password.isEmpty else { return nil }
+        return password
+    }
+
+    static func storeKeychainPassword(_ password: String) {
+        guard !password.isEmpty else { return }
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+        ]
+        let data = Data(password.utf8)
+        var status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var add = base
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            status = SecItemAdd(add as CFDictionary, nil)
+        }
+    }
+
+    static func removeKeychainPassword() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
     /// Run argv as root: `sudo -S -k <argv>` with the password on stdin.
     /// Returns the command's exit status, or nil when the process couldn't run.
     /// `-k` forces fresh authentication every call — we always supply the
@@ -135,6 +188,27 @@ enum AdminAuth {
         alert.accessoryView = field
         alert.addButton(withTitle: L("授权并储存"))
         alert.addButton(withTitle: L("取消"))
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn,
+              !field.stringValue.isEmpty else { return nil }
+        return field.stringValue
+    }
+
+    /// Modal prompt replacing the un-rememberable native "security wants to
+    /// use the System keychain" dialog: asks for the System keychain's own
+    /// password. The caller validates it by actually unlocking and stores it
+    /// on success, so it is ever answered once. Returns nil on skip.
+    @MainActor static func promptSystemKeychainPassword(retry: Bool) -> String? {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = retry ? L("System钥匙串密码不正确，请重试") : L("需要System钥匙串密码（仅需一次）")
+        alert.informativeText = L("读取Wi-Fi密码需要解锁System钥匙串。它有独立密码——通常等于装机时的开机密码，改过开机密码后两者不同。验证通过后NIO Play将永久记住，之后读取自动静默解锁、不再弹窗；点「跳过」则改用macOS原生认证框（无法记忆，每次必弹）。")
+        let field = NSSecureTextField()
+        field.placeholderString = L("System钥匙串密码")
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: L("解锁并记住"))
+        alert.addButton(withTitle: L("跳过"))
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn,
               !field.stringValue.isEmpty else { return nil }
