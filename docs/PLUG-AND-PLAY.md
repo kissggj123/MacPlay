@@ -21,7 +21,11 @@
 - 用户关闭即插即用开关（设置页或菜单栏）
 - 应用退出（`applicationShouldTerminate` 返回 `.terminateLater`，还原完再退）
 
-**管理员授权：** 开启、还原各弹一次 osascript 密码框（与防火墙一键放行同一套路）。用户点掉授权 → 原样回退不留半成品；崩溃/强退 → 快照留在磁盘，下次启动自动继续恢复。
+**管理员授权（1.3.3 起一次性）：** `AdminAuth`（PlugAndPlay.swift 顶部）。首次特权操作弹自有密码框（NSAlert + NSSecureTextField，标题「钥匙串管理员密码授权」）→ `sudo -S -k /usr/bin/true` 验证 → 存入登录钥匙串（kSecClassGenericPassword，service `NIO Play Admin`，ThisDeviceOnly，稳定签名下读写无 ACL 弹窗）。之后所有特权脚本（即插即用开启/还原、防火墙放行、读取 Wi-Fi 密码）走 `sudo -S -k` 密码走 stdin，全程零弹窗。密码失效（改密/降权）：删除存储并重新弹框；标准账户（非 admin，sudo 永远验不过）三次失败后回落旧 osascript 系统弹窗（它接受任意管理员的凭据）。`-k` 强制每次全新认证，杜绝 sudo 时间戳缓存掩盖过期密码。用户点掉自有密码框 → `.canceled`（未执行任何命令直接清理）；脚本执行失败 → `.failed`（保留状态）。崩溃/强退 → 快照留在磁盘，下次启动自动继续恢复。
+
+**授权管理（1.3.3 新增）：** 设置 → 连接 → 授权管理。管理员授权实时状态（`PlayModel.adminAuthState`：none/checking/ok/invalid，`refreshAdminAuthState()` 后台 sudo 验证）+ 网络密码记忆计数（本地缓存 `wifiProfiles.count` + 应用钥匙串 `NIO Play WiFi` 条目数 `refreshKeychainWifiCount()`）。操作：`authorizeAdmin(force:)`——force=true 重新授权（总是弹框替换凭据），force=false 修复授权（静默校验，失效才清存重问）；`removeAdminAuth()` 移除凭据。授权成功后自动补读当前网络密码（无线模式且密码为空时）。
+
+**Wi-Fi 密码静默读取（1.3.3 新增）：** `readSavedNetworkPassword()` 在本地缓存与应用自有钥匙串副本都未命中时，若存有管理员凭据，先 `verifyPassword` 校验（失效即清除并回落旧系统弹窗流程），再以 `runSudoOutput` 走 `sudo security find-generic-password -w -s AirPort -a <SSID> <登录钥匙串路径>` root 上下文静默读取（argv 直传无 shell 转义；SSID 以 `-` 开头时跳过防误解析为旗标）。成功 → 本地缓存 + 应用钥匙串副本；退出码 44（登录钥匙串无此条目）→ 回落原 `SecKeychainFindGenericPassword` 用户态检索（覆盖 iCloud Local Items 同步条目）；其他失败 → 提示重试或手填，绝不回落以避免连续两次密码弹窗。
 
 **引导设置（1.3.3 新增）：** 设置页「即插即用」Section 内的 DisclosureGroup。展示 nat.plist 实时状态（热点名称 / Wi-Fi 共享段 / 共享开关，绿=就绪 橙=缺失）+ 激活后的热点网关地址；一键跳转系统设置互联网共享面板（`x-apple.systempreferences:com.apple.preferences.sharing?internetSharing`，macOS 27.2 实测可用）；「重新检测」重读 nat.plist 与 bridge IP。数据源是 `PlayModel.pnpGuideConfig / pnpGuideBridgeIP`（@Published），由 `refreshPnpGuide()` 刷新——`pnpRefreshLanInfo()`（控制器激活/还原后调用）与按钮都会触发。
 
@@ -53,7 +57,7 @@ Wi-Fi https://192.168.2.1:8443      ← 点击复制（黑色可点）
 
 | 文件 | 职责 |
 | --- | --- |
-| `native/App/PlugAndPlay.swift` | **全部即插即用逻辑**。分三层：`PlugAndPlayCore`（纯函数：plist 解析、shell 脚本拼装、状态探测，无 AppKit 依赖）、`PnpState`（快照 Codable）、`PlugAndPlayController`（@MainActor 状态机） |
+| `native/App/PlugAndPlay.swift` | **全部即插即用逻辑**。分四层：`AdminAuth`（钥匙串管理员凭据 + sudo -S 执行 + 密码弹窗，防火墙放行也复用）、`PlugAndPlayCore`（纯函数：plist 解析、shell 脚本拼装、状态探测，无 AppKit 依赖）、`PnpState`（快照 Codable）、`PlugAndPlayController`（@MainActor 状态机，特权执行入口 `runAdminFlow`） |
 | `native/App/PlugAndPlayPolicy.test.swift` | Core 层单测（@main 直跑，非 XCTest） |
 | `native/App/MacPlay.swift` | `PlaySettings.plugAndPlay` 持久化开关；`PlayModel` 三个 @Published（active/busy/status）+ 引导设置两个 @Published（pnpGuideConfig/pnpGuideBridgeIP）与 `refreshPnpGuide()`；`extension PlayModel: PlugAndPlayHost`；`refreshUSB()` 末尾触发；连接页「即插即用」Section（含引导设置 DisclosureGroup）；`revertBeforeQuit` |
 | `native/App/ApplicationLifecycle.swift` | 托盘/Dock 菜单构建器 `menu()`、参数区、地址点击复制、`togglePlugAndPlay`、`paramsKey` 菜单重建缓存、退出时还原钩子 |

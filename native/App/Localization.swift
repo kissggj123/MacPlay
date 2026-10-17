@@ -365,6 +365,28 @@ enum MacPlayLocalization {
         "重新检测": ("重新偵測", "Re-detect"),
         "车机访问地址": ("車機存取位址", "Head-unit address"),
         "第 1 步：点按「打开系统设置 → 互联网共享」，在共享设置中将共享来源选为「iPhone USB」、共享给选为「Wi-Fi」，并设置热点名称与密码（只需配置一次）。第 2 步：回到此处打开上方开关，插入 iPhone 即自动生效。改完点「重新检测」确认状态。": ("第 1 步：點按「打開系統設定 → 網際網路共享」，在共享設定中將共享來源選為「iPhone USB」、共享給選為「Wi-Fi」，並設定熱點名稱與密碼（只需設定一次）。第 2 步：回到此處開啟上方開關，插入 iPhone 即自動生效。改完點「重新偵測」確認狀態。", "Step 1: tap “Open System Settings → Internet Sharing” and share “iPhone USB” to Wi-Fi with your hotspot name and password (one-time setup). Step 2: come back and turn on the switch above — plugging in the iPhone then takes effect automatically. Tap “Re-detect” afterwards to confirm."),
+        // Admin credential (2026-10): one-shot password prompt stored in the
+        // login keychain; privileged scripts then run via sudo -S silently.
+        "钥匙串管理员密码授权": ("鑰匙串管理員密碼授權", "Keychain Administrator Authorization"),
+        "管理员密码不正确，请重试": ("管理員密碼不正確，請重試", "Administrator password is incorrect; try again"),
+        "您的密码将采用系统级加密存入 macOS 钥匙串，仅用于本机静默执行即插即用、防火墙放行与读取网络密码等特权操作；之后的自动执行不再重复询问，可随时在「设置 → 连接 → 授权管理」中移除。": ("您的密碼將採用系統級加密存入 macOS 鑰匙串，僅用於本機靜默執行即插即用、防火牆放行與讀取網路密碼等特權操作；之後的自動執行不再重複詢問，可隨時在「設定 → 連線 → 授權管理」中移除。", "Your password is stored in the macOS keychain with system-level encryption and is used only to silently perform privileged operations on this Mac — plug & play, firewall allow, and reading network passwords. Later automatic runs never ask again; remove it anytime in Settings → Connection → Authorization."),
+        "请输入当前 Mac 登录密码": ("請輸入目前 Mac 登入密碼", "Enter this Mac's login password"),
+        "授权并储存": ("授權並儲存", "Authorize & Store"),
+        // Authorization-management section (设置 → 连接 → 授权管理).
+        "授权管理": ("授權管理", "Authorization"),
+        "管理员授权": ("管理員授權", "Administrator"),
+        "已授权": ("已授權", "Authorized"),
+        "密码已失效": ("密碼已失效", "Password no longer valid"),
+        "正在验证…": ("正在驗證…", "Verifying…"),
+        "未授权": ("未授權", "Not authorized"),
+        "重新授权": ("重新授權", "Re-authorize"),
+        "立即授权": ("立即授權", "Authorize Now"),
+        "修复授权": ("修復授權", "Repair Authorization"),
+        "移除授权": ("移除授權", "Remove"),
+        "网络密码记忆": ("網路密碼記憶", "Remembered networks"),
+        "管理员密码经系统级加密存入本机钥匙串，用于静默执行即插即用、防火墙放行与读取网络密码等特权操作；密码失效时自动重新询问。网络密码首次读取后自动缓存，之后无需再次授权。": ("管理員密碼經系統級加密存入本機鑰匙串，用於靜默執行即插即用、防火牆放行與讀取網路密碼等特權操作；密碼失效時自動重新詢問。網路密碼首次讀取後自動快取，之後無需再次授權。", "The administrator password is stored in this Mac's keychain with system-level encryption and used only to silently perform privileged operations (plug & play, firewall allow, reading network passwords); when it stops working you are asked again. Network passwords are cached after the first read — no further authorization needed."),
+        "已通过管理员授权静默读取并记住密码，之后无需再授权。": ("已透過管理員授權靜默讀取並記住密碼，之後無需再授權。", "Password read silently via the stored administrator authorization and remembered; no further authorization needed."),
+        "未获准读取（可稍后重试，或手动填写一次即可永久记住）。": ("未獲准讀取（可稍後重試，或手動填寫一次即可永久記住）。", "Read permission was not granted. Try again later, or enter the password once manually to remember it forever."),
         "热点": ("熱點", "Hotspot"),
         "车机地址等待网络…": ("車機位址等待網路…", "Car address waiting for network…"),
         "点击复制车机地址": ("點擊複製車機位址", "Click to copy the car browser address"),
@@ -402,6 +424,7 @@ enum MacPlayLocalization {
         (try! NSRegularExpression(pattern: "^画面：(\\d+)×(\\d+) · (\\d+)fps$"), "畫面：$1×$2 · $3fps", "Video: $1×$2 · $3fps"),
         (try! NSRegularExpression(pattern: "^即插即用：热点 (.+)$"), "即插即用：熱點 $1", "Plug & Play: hotspot $1"),
         (try! NSRegularExpression(pattern: "^即插即用已开启：热点「(.+)」，合盖不休眠已开启$"), "即插即用已開啟：熱點「$1」，合蓋不休眠已開啟", "Plug & Play on: hotspot “$1”; lid-close sleep disabled"),
+        (try! NSRegularExpression(pattern: "^已记住(\\d+)个网络（钥匙串(\\d+)个）$"), "已記住$1個網路（鑰匙串$2個）", "$1 network(s) remembered ($2 in keychain)"),
     ]
 }
 

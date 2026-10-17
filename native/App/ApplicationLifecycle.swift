@@ -119,7 +119,10 @@ import Combine
             item.target=self;item.isEnabled=enabled;menu.addItem(item)
         }
         item("显示NIO Play",#selector(showMain))
-        item("显示CarPlay",#selector(showCarPlay),enabled:model.running)
+        // Fork: headless mode has no local CarPlay window (engine's
+        // showVideoWindow is a no-op — `presented` never becomes true), so the
+        // item would only yank the faceless receiver process to front.
+        item("显示CarPlay",#selector(showCarPlay),enabled:model.running && model.settings.headless != true)
         menu.addItem(.separator())
         if model.running {menu.addItem(volumeItem())}
         item(model.receivingOrWaiting ? "停止接收" : "启动接收",#selector(toggleReceiver))
@@ -209,7 +212,7 @@ import Combine
     // plug-and-play state — so streaming-time @Published churn can't rebuild
     // the menu unless one of these actually moved.
     private func paramsKey(_ model: PlayModel) -> String {
-        "\(model.settings.selectedPhone ?? model.settings.lastPhone ?? "")|\(model.usbDevices.joined(separator:","))|\(model.settings.wireless)|\(model.settings.ssid)|\(model.settings.width)x\(model.settings.height)|\(model.settings.fps)|\(model.plugAndPlayEnabled)|\(model.plugAndPlayActive)|\(model.plugAndPlayBusy)|\(model.plugAndPlayStatus)"
+        "\(model.settings.selectedPhone ?? model.settings.lastPhone ?? "")|\(model.usbDevices.joined(separator:","))|\(model.settings.wireless)|\(model.settings.ssid)|\(model.settings.width)x\(model.settings.height)|\(model.settings.fps)|\(model.settings.headless == true)|\(model.plugAndPlayEnabled)|\(model.plugAndPlayActive)|\(model.plugAndPlayBusy)|\(model.plugAndPlayStatus)"
     }
     private func updateMenus() {
         if let model {

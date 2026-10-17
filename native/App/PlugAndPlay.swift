@@ -1,6 +1,134 @@
 import Foundation
 import AppKit
 import CoreWLAN
+import Security
+
+// Fork: one-shot admin credential. The FIRST privileged operation shows our
+// own password dialog, verifies the password via `sudo -S -k /usr/bin/true`,
+// and stores it in the login keychain (kSecClassGenericPassword, service
+// "NIO Play Admin", ThisDeviceOnly). Every later operation — plug-and-play
+// activate/revert, firewall allow — runs scripts through
+// `sudo -S -k /bin/sh -c <script>` with the stored password piped to stdin:
+// no more password dialogs. If the password stops verifying (changed / user
+// demoted from admin) the stored copy is dropped and we re-prompt; standard
+// (non-admin) accounts fall back to the old osascript system prompt, which
+// accepts any admin's credentials.
+enum AdminAuth {
+    static let service = "NIO Play Admin"
+    private static let account = "admin"
+
+    static func storedPassword() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let password = String(data: data, encoding: .utf8),
+              !password.isEmpty else { return nil }
+        return password
+    }
+
+    static func storePassword(_ password: String) {
+        guard !password.isEmpty else { return }
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let data = Data(password.utf8)
+        var status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var add = base
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            status = SecItemAdd(add as CFDictionary, nil)
+        }
+    }
+
+    static func removePassword() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    /// Run argv as root: `sudo -S -k <argv>` with the password on stdin.
+    /// Returns the command's exit status, or nil when the process couldn't run.
+    /// `-k` forces fresh authentication every call — we always supply the
+    /// password, so a cached sudo timestamp can never mask a stale one.
+    nonisolated static func runSudo(_ arguments: [String], password: String) -> Int32? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        task.arguments = ["-S", "-k"] + arguments
+        let input = Pipe()
+        task.standardInput = input
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        do { try task.run() } catch { return nil }
+        try? input.fileHandleForWriting.write(contentsOf: Data((password + "\n").utf8))
+        try? input.fileHandleForWriting.close()
+        task.waitUntilExit()
+        return task.terminationStatus
+    }
+
+    nonisolated static func verifyPassword(_ password: String) -> Bool {
+        runSudo(["/usr/bin/true"], password: password) == 0
+    }
+
+    /// Run a shell script as root with the stored password (nil when none is
+    /// stored or it no longer verifies). Exit status semantics preserved.
+    nonisolated static func runScript(_ script: String) -> Int32? {
+        guard let password = storedPassword(), verifyPassword(password) else { return nil }
+        return runSudo(["/bin/sh", "-c", script], password: password)
+    }
+
+    /// Run argv as root and capture stdout, e.g. `security find-generic-password`
+    /// for the AirPort item. Returns (exit status, stdout) — status nil-safe
+    /// only when the process failed to launch (-1, nil).
+    nonisolated static func runSudoOutput(_ arguments: [String], password: String) -> (Int32, String?) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        task.arguments = ["-S", "-k"] + arguments
+        let input = Pipe()
+        let output = Pipe()
+        task.standardInput = input
+        task.standardOutput = output
+        task.standardError = Pipe()
+        do { try task.run() } catch { return (-1, nil) }
+        try? input.fileHandleForWriting.write(contentsOf: Data((password + "\n").utf8))
+        try? input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return (task.terminationStatus, String(data: data, encoding: .utf8))
+    }
+
+    /// Modal password prompt styled after the reference dialog: title states
+    /// what is stored, body explains scope and how to revoke. Returns nil when
+    /// the user cancels.
+    @MainActor static func promptPassword(retry: Bool) -> String? {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = retry ? L("管理员密码不正确，请重试") : L("钥匙串管理员密码授权")
+        alert.informativeText = L("您的密码将采用系统级加密存入 macOS 钥匙串，仅用于本机静默执行即插即用、防火墙放行与读取网络密码等特权操作；之后的自动执行不再重复询问，可随时在「设置 → 连接 → 授权管理」中移除。")
+        let field = NSSecureTextField()
+        field.placeholderString = L("请输入当前 Mac 登录密码")
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: L("授权并储存"))
+        alert.addButton(withTitle: L("取消"))
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn,
+              !field.stringValue.isEmpty else { return nil }
+        return field.stringValue
+    }
+}
 
 // 即插即用（CarPlay 盒子模式）：插入 iPhone 后 Mac 自动变成车机的网络——
 // 断开当前 Wi-Fi → 打开 macOS「互联网共享」（NAT：iPhone USB → 预配置的
@@ -265,7 +393,7 @@ enum PlugAndPlayCore {
         host.plugAndPlayStatus = "即插即用：正在断开 Wi-Fi…"
         iface?.disassociate()
         host.plugAndPlayStatus = "即插即用：正在开启网络共享（需要管理员授权）…"
-        let result = await Task.detached { Self.runAdmin(PlugAndPlayCore.enableScript(airportConfigured: config.hasAirport)) }.value
+        let result = await Self.runAdminFlow(PlugAndPlayCore.enableScript(airportConfigured: config.hasAirport))
         guard result != .canceled else {
             state = nil
             try? FileManager.default.removeItem(at: stateURL)
@@ -298,7 +426,7 @@ enum PlugAndPlayCore {
         defer { host.plugAndPlayBusy = false }
         revertGraceTimer?.invalidate(); revertGraceTimer = nil
         host.plugAndPlayStatus = "即插即用：正在恢复（需要管理员授权）…"
-        let result = await Task.detached { Self.runAdmin(PlugAndPlayCore.restoreScript(for: snapshot)) }.value
+        let result = await Self.runAdminFlow(PlugAndPlayCore.restoreScript(for: snapshot))
         state = nil
         host.plugAndPlayActive = false
         host.pnpRefreshLanInfo()
@@ -336,8 +464,34 @@ enum PlugAndPlayCore {
             : "即插即用已开启：热点「\(name)」，合盖不休眠已开启"
     }
 
-    // osascript 提权执行；在后台线程等待，避免主线程被密码弹窗卡住。
-    private nonisolated static func runAdmin(_ script: String) -> PlugAndPlayAdminResult {
+    // Fork: privileged execution, keychain-first. Fast path: stored password
+    // verifies → sudo -S runs the script silently (no dialog at all). Stored
+    // password stale → drop it and re-prompt (up to 3 tries), store on first
+    // success. Standard (non-admin) accounts whose password can never verify
+    // with sudo fall back to the osascript system prompt, which accepts any
+    // admin's credentials.
+    @MainActor private static func runAdminFlow(_ script: String) async -> PlugAndPlayAdminResult {
+        if let password = AdminAuth.storedPassword() {
+            let verified = await Task.detached { AdminAuth.verifyPassword(password) }.value
+            if verified {
+                let status = await Task.detached { AdminAuth.runSudo(["/bin/sh", "-c", script], password: password) }.value
+                return status == 0 ? .success : .failed
+            }
+            AdminAuth.removePassword()
+        }
+        for attempt in 0..<3 {
+            guard let password = AdminAuth.promptPassword(retry: attempt > 0) else { return .canceled }
+            let verified = await Task.detached { AdminAuth.verifyPassword(password) }.value
+            guard verified else { continue }
+            AdminAuth.storePassword(password)
+            let status = await Task.detached { AdminAuth.runSudo(["/bin/sh", "-c", script], password: password) }.value
+            return status == 0 ? .success : .failed
+        }
+        return await Task.detached { Self.runAdminViaOsaScript(script) }.value
+    }
+
+    // osascript 提权执行（兜底路径）；在后台线程等待，避免主线程被密码弹窗卡住。
+    private nonisolated static func runAdminViaOsaScript(_ script: String) -> PlugAndPlayAdminResult {
         let escaped = script
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
