@@ -259,6 +259,7 @@ struct PlaySettings: Codable {
         try? FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if let data = try? Data(contentsOf: configURL), let decoded = try? JSONDecoder().decode(PlaySettings.self, from:data) { settings = decoded }
         MacPlayLocalization.language=settings.language ?? "system"
+        applyAppearance()
         if ![30,60,90,120].contains(settings.fps) { settings.fps=60 }
         if settings.resolution == "1920x720" { settings.resolution="custom" }
         if settings.resolution == "3840x2160" { settings.resolution="native" }
@@ -499,6 +500,17 @@ struct PlaySettings: Codable {
         sendAudioCommand()
         persistPreferences()
     }
+    // Fork: the appearance override must reach NSApp, not just SwiftUI —
+    // custom NSAlerts (admin password prompt), the menu bar and Dock menus
+    // all follow NSApp.appearance; without this they stayed at "system"
+    // while the SwiftUI window followed the setting.
+    func applyAppearance() {
+        switch settings.appearance {
+        case "light": NSApp?.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp?.appearance = NSAppearance(named: .darkAqua)
+        default: NSApp?.appearance = nil
+        }
+    }
     func showCarPlayWindow() {
         // Headless mode never creates a local window — the engine's show
         // command is a no-op there; don't activate the faceless receiver.
@@ -686,9 +698,10 @@ struct PlaySettings: Codable {
         if let channel=interface.wlanChannel(){settings.channel=Int(channel.channelNumber)}
         if let ssid=interface.ssid(), !ssid.isEmpty {
             if settings.ssid != ssid {
-                // Fork: auto-fill password from saved WiFi profiles, else read
-                // it from the keychain automatically (first time this shows one
-                // system dialog — 始终允许 — and it is cached locally forever).
+                // Fork: auto-fill password from saved WiFi profiles / the
+                // app-owned keychain copy; otherwise attempt the (silent)
+                // admin-credential read — see readSavedNetworkPassword(). No
+                // path here ever pops the system keychain access dialog.
                 if let savedPassword = settings.wifiProfiles[ssid], !savedPassword.isEmpty {
                     settings.password = savedPassword
                     passwordStatus = "已自动填入已保存的网络密码。"
@@ -776,87 +789,67 @@ struct PlaySettings: Codable {
         let ssid=settings.ssid
         guard !ssid.isEmpty else {passwordStatus="请先读取当前网络名称。";return}
         readingPassword=true
-        passwordStatus="正在读取钥匙串；系统弹出授权时请点击「始终允许」，之后不再询问。"
+        passwordStatus="正在读取钥匙串…"
         Task {
-            // Fork: admin-credential fast path — read the AirPort item as root
-            // via the security tool (argv form; no shell quoting). Root context
-            // reads the user's login keychain without the per-app ACL
-            // challenge, so a stored credential makes this fully silent. A
-            // stale credential is detected via sudo verification and cleared;
-            // "not found" (exit 44) falls through to the legacy user-context
-            // search which also covers iCloud-synced "Local Items". Any other
-            // failure (denied/cancelled) bails out with a hint so the user
-            // never sees two password dialogs in a row.
-            if let stored = AdminAuth.storedPassword(), !ssid.hasPrefix("-") {
-                let keychainPath = NSHomeDirectory() + "/Library/Keychains/login.keychain-db"
+            // Fork: admin-credential path — read the AirPort item as root via
+            // the security tool (argv form; no shell quoting). Root reads the
+            // login AND System keychains without any ACL challenge. Query by
+            // kind+account ("AirPort Network Password" / SSID), which is how
+            // AirPort items are shaped on macOS that still keeps them.
+            //
+            // The legacy user-context SecKeychainFindGenericPassword search is
+            // GONE on purpose: newer macOS no longer stores Wi-Fi passwords in
+            // keychains at all, and merely touching the System keychain pops
+            // "NIO Play wants to use the System keychain" — a dialog with NO
+            // "Always Allow", i.e. a prompt on EVERY read for a password that
+            // isn't even there. When the search comes up empty the user fills
+            // the password once by hand; it is cached locally + in the
+            // app-owned keychain so this never comes up again.
+            if !ssid.hasPrefix("-"), let stored = AdminAuth.storedPassword() {
                 let verified = await Task.detached { AdminAuth.verifyPassword(stored) }.value
                 guard settings.ssid == ssid else { readingPassword=false; passwordStatus="网络已切换，请重新读取密码。"; return }
                 if !verified {
                     AdminAuth.removePassword()
                     adminAuthState = "none"
-                    // Fall through to the legacy flow: the system keychain
-                    // dialog below accepts the CURRENT password and works for
-                    // standard (non-admin) accounts too.
+                    readingPassword=false
+                    passwordStatus="管理员授权已失效，请到 设置→连接→授权管理 重新授权，或手动填写密码一次（将永久记住）。"
+                    return
+                }
+                let result = await Task.detached { () -> (Int32, String?) in
+                    // Confirmed on this machine: AirPort items are stored as
+                    // svce="AirPort" + acct=<SSID>, and the CURRENT network's
+                    // entry lives in the SYSTEM keychain (old ones also pile
+                    // up in the login keychain). Search both as root — the
+                    // canonical silent Wi-Fi-password dump.
+                    AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w",
+                                             "-s","AirPort","-a",ssid,
+                                             NSHomeDirectory() + "/Library/Keychains/login.keychain-db",
+                                             "/Library/Keychains/System.keychain"], password: stored)
+                }.value
+                guard settings.ssid == ssid else { readingPassword=false; passwordStatus="网络已切换，请重新读取密码。"; return }
+                readingPassword=false
+                if result.0 == 0, let password = result.1?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
+                    settings.password=password
+                    settings.wifiProfiles[ssid]=password
+                    writeAppOwnedWifiPassword(ssid: ssid, password: password)
+                    persistPreferences()
+                    passwordStatus="已通过管理员授权静默读取并记住密码，之后无需再授权。"
+                } else if result.0 == 44 {
+                    passwordStatus="钥匙串中没有该网络密码（新版macOS已不把Wi-Fi密码存入钥匙串）。请手动填写一次，NIO Play将永久记住。"
                 } else {
-                    let result = await Task.detached { () -> (Int32, String?) in
-                        AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w","-s","AirPort","-a",ssid,keychainPath], password: stored)
-                    }.value
-                    guard settings.ssid == ssid else { readingPassword=false; passwordStatus="网络已切换，请重新读取密码。"; return }
-                    if result.0 == 0, let password = result.1?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
-                        settings.password=password
-                        settings.wifiProfiles[ssid]=password
-                        writeAppOwnedWifiPassword(ssid: ssid, password: password)
-                        persistPreferences()
-                        readingPassword=false
-                        passwordStatus="已通过管理员授权静默读取并记住密码，之后无需再授权。"
-                        return
-                    }
-                    if result.0 != 44 {
-                        readingPassword=false
-                        passwordStatus="未获准读取（可稍后重试，或手动填写一次即可永久记住）。"
-                        return
-                    }
-                    // 44: not in login.keychain-db → legacy search may still find
-                    // it in iCloud Local Items.
+                    passwordStatus="未获准读取（状态码\(result.0)），可稍后重试，或手动填写一次（将永久记住）。"
                 }
+                return
             }
-            let result=await Task.detached { () -> (OSStatus, String?) in
-                var length: UInt32=0
-                var bytes: UnsafeMutableRawPointer?
-                let service="AirPort"
-                let status=service.withCString { servicePtr in
-                    ssid.withCString { accountPtr in
-                        SecKeychainFindGenericPassword(nil,UInt32(service.utf8.count),servicePtr,UInt32(ssid.utf8.count),accountPtr,&length,&bytes,nil)
-                    }
-                }
-                defer { if let bytes {SecKeychainItemFreeContent(nil,bytes)} }
-                let password=bytes.flatMap {String(data:Data(bytes:$0,count:Int(length)),encoding:.utf8)}
-                return (status,password)
-            }.value
-            readingPassword=false
-            guard settings.ssid==ssid else {passwordStatus="网络已切换，请重新读取密码。";return}
-            if result.0==errSecSuccess,let password=result.1,!password.isEmpty {
-                settings.password=password
-                // Cache locally so future sessions never touch the keychain
-                // again (app updates re-sign the binary and invalidate the
-                // keychain ACL — the local cache survives all of that).
-                settings.wifiProfiles[ssid]=password
-                // Fork: also keep an app-owned keychain copy (stable signature
-                // ⇒ no ACL prompt) so a wiped settings file still resolves
-                // without the system AirPort authorization.
-                writeAppOwnedWifiPassword(ssid: ssid, password: password)
-                persistPreferences()
-                passwordStatus="已读取并记住密码，之后无需再授权。"
-            } else if result.0==errSecSuccess {
-                passwordStatus="钥匙串未返回可用密码，请手动填写。"
-            } else if result.0==errSecItemNotFound {
-                passwordStatus="钥匙串未找到该网络的可读取密码，请手动填写。"
-            } else if result.0==errSecUserCanceled || result.0==errSecAuthFailed || result.0==errSecInteractionNotAllowed {
-                passwordStatus="未获准读取（系统状态码\(result.0)）。重试并在系统弹窗选「始终允许」，或手动填写一次即可永久记住。"
-            } else {
-                let explanation=SecCopyErrorMessageString(result.0,nil) as String? ?? ""
-                passwordStatus="无法读取网络密码（系统状态码\(result.0)），请手动填写。"+(explanation.isEmpty ? "" : "\n"+explanation)
-            }
+            // No admin credential yet — run the ONE-TIME authorization flow.
+            // authorizeAdmin() prompts once, stores the password in the login
+            // keychain (device-only), and on success re-invokes
+            // readSavedNetworkPassword(), which now takes the silent sudo
+            // path above. One password entry ever; every later read (manual
+            // button, network switch, app relaunch) is fully silent.
+            readingPassword = false
+            passwordStatus = "首次读取需一次管理员授权（仅此一次，之后自动静默读取）。"
+            authorizeAdmin(force: false)
         }
     }
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {

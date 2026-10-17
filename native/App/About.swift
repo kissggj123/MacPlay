@@ -276,6 +276,7 @@ struct MacPlayAboutView: View {
         Section(L("外观")) {
             Picker(L("外观"),selection:Binding(get:{model.settings.appearance ?? "system"},set:{
                 model.settings.appearance=$0=="system" ? nil : $0;model.persistPreferences()
+                model.applyAppearance()
             })) {
                 Text(L("跟随系统")).tag("system")
                 Text(L("浅色")).tag("light")

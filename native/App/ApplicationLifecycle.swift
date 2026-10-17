@@ -8,6 +8,14 @@ import Combine
     private var openMainWindow: (() -> Void)?
     private var statusItem: NSStatusItem?
     private weak var statusLineItem: NSMenuItem?
+    // Fork: weak refs for in-place updates when the menu is OPEN — the
+    // objectWillChange → rebuild chain installs a fresh NSMenu, but macOS
+    // keeps showing the already-tracked old one for the current tracking
+    // session, so a state flip mid-session (e.g. toggling headless) could
+    // still show a stale enabled/disabled item. menuWillOpen patches these
+    // in place so the menu the user is looking at is always right.
+    private weak var carPlayMenuItem: NSMenuItem?
+    private weak var toggleReceiverItem: NSMenuItem?
     // Last menu content cache — objectWillChange fires for every @Published
     // change (`logs` alone ticks many times/second while streaming); the menu
     // only depends on these four.
@@ -44,6 +52,9 @@ import Combine
         if let window=NSApp.windows.first(where:{!($0 is NSPanel) && $0.canBecomeMain}) {
             mainWindow=window;window.delegate=self
         }
+        // The model's init may run before NSApp exists — re-apply the
+        // appearance override now that the app object is guaranteed alive.
+        model.applyAppearance()
         preferencesChanged()
         model.enableAutomaticUSBStart()
     }
@@ -74,7 +85,7 @@ import Combine
         }
         return L("● 接收中")
     }
-    private func menu() -> NSMenu {
+    private func menu(_ assignRefs: Bool = true) -> NSMenu {
         let menu=NSMenu()
         menu.delegate=self
         guard let model else {return menu}
@@ -122,10 +133,20 @@ import Combine
         // Fork: headless mode has no local CarPlay window (engine's
         // showVideoWindow is a no-op — `presented` never becomes true), so the
         // item would only yank the faceless receiver process to front.
-        item("显示CarPlay",#selector(showCarPlay),enabled:model.running && model.settings.headless != true)
+        let carPlayItem=NSMenuItem(title:L("显示CarPlay"),action:#selector(showCarPlay),keyEquivalent:"")
+        carPlayItem.target=self
+        carPlayItem.isEnabled=model.running && model.settings.headless != true
+        // Headless has NO local CarPlay window at all — hide the item outright
+        // (not just gray it) so the menu can't even suggest it.
+        carPlayItem.isHidden = model.settings.headless == true
+        if assignRefs {carPlayMenuItem=carPlayItem}
+        menu.addItem(carPlayItem)
         menu.addItem(.separator())
         if model.running {menu.addItem(volumeItem())}
-        item(model.receivingOrWaiting ? "停止接收" : "启动接收",#selector(toggleReceiver))
+        let toggleItem=NSMenuItem(title:L(model.receivingOrWaiting ? "停止接收" : "启动接收"),action:#selector(toggleReceiver),keyEquivalent:"")
+        toggleItem.target=self
+        if assignRefs {toggleReceiverItem=toggleItem}
+        menu.addItem(toggleItem)
         menu.addItem(.separator())
         let pnpItem=NSMenuItem(title:L("即插即用"),action:#selector(togglePlugAndPlay),keyEquivalent:"")
         pnpItem.target=self
@@ -192,6 +213,16 @@ import Combine
     }
     // MARK: NSMenuDelegate
     func menuWillOpen(_ menu:NSMenu) {
+        // Fork: patch state-dependent items IN PLACE on open — the rebuild
+        // chain swaps in a fresh NSMenu, but an already-open menu keeps
+        // tracking the old instance, so without this the user could look at
+        // a stale enabled/disabled "显示CarPlay" right after toggling
+        // headless (or after running stopped while the menu was key).
+        if let model {
+            carPlayMenuItem?.isEnabled=model.running && model.settings.headless != true
+            carPlayMenuItem?.isHidden=model.settings.headless == true
+            toggleReceiverItem?.title=L(model.receivingOrWaiting ? "停止接收" : "启动接收")
+        }
         statusLineItem?.title=statusTitle()
         // Addresses move when the shared hotspot assigns DHCP; the 10s timer
         // only runs while the settings window exists, so refresh on open too.
@@ -224,7 +255,7 @@ import Combine
         }
         statusItem?.menu=menu()
     }
-    func applicationDockMenu(_ sender:NSApplication) -> NSMenu? {menu()}
+    func applicationDockMenu(_ sender:NSApplication) -> NSMenu? {menu(false)}
     @objc private func showMain() {
         explicitWindowRequestUntil=Date().addingTimeInterval(1)
         model?.showMainWindow()
