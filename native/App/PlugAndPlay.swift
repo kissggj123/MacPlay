@@ -109,6 +109,18 @@ enum AdminAuth {
         return (task.terminationStatus, String(data: data, encoding: .utf8))
     }
 
+    /// Unlock the System keychain with the admin password. It ships LOCKED
+    /// and re-locks on reboot; even root cannot read items from a locked
+    /// System keychain — securityd would pop the SecurityAgent dialog
+    /// ("security wants to use the System keychain", Deny/Allow, no "Always
+    /// Allow") on every read. Unlocking ourselves first is silent and a no-op
+    /// when already unlocked. The password also sits in argv for the brief
+    /// run — local one-shot as root, acceptable. Returns true on success.
+    nonisolated static func unlockSystemKeychain(password: String) -> Bool {
+        runSudo(["/usr/bin/security", "unlock-keychain", "-p", password,
+                 "/Library/Keychains/System.keychain"], password: password) == 0
+    }
+
     /// Modal password prompt styled after the reference dialog: title states
     /// what is stored, body explains scope and how to revoke. Returns nil when
     /// the user cancels.

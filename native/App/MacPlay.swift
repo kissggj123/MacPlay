@@ -791,18 +791,25 @@ struct PlaySettings: Codable {
         readingPassword=true
         passwordStatus="正在读取钥匙串…"
         Task {
-            // Fork: admin-credential path — read the AirPort item as root via
-            // the security tool (argv form; no shell quoting). Root reads the
-            // login AND System keychains without any ACL challenge. Query by
-            // kind+account ("AirPort Network Password" / SSID), which is how
-            // AirPort items are shaped on macOS that still keeps them.
+            // Fork: admin-credential path — unlock the System keychain, then
+            // read the AirPort item as root via the security tool (argv form;
+            // no shell quoting). Query by kind+account ("AirPort" / SSID),
+            // which is how AirPort items are shaped on macOS that still keeps
+            // them.
+            //
+            // CRITICAL: the System keychain ships LOCKED. Even root reading a
+            // locked System keychain triggers the SecurityAgent dialog
+            // ("security wants to use the System keychain", Deny/Allow, NO
+            // "Always Allow") on EVERY read — SecurityAgent cannot be scripted
+            // or remembered. Fix: pre-unlock the keychain ourselves with the
+            // stored admin password (unlock is a no-op when already unlocked
+            // and stays unlocked until reboot) — every later read is then
+            // fully silent.
             //
             // The legacy user-context SecKeychainFindGenericPassword search is
             // GONE on purpose: newer macOS no longer stores Wi-Fi passwords in
             // keychains at all, and merely touching the System keychain pops
-            // "NIO Play wants to use the System keychain" — a dialog with NO
-            // "Always Allow", i.e. a prompt on EVERY read for a password that
-            // isn't even there. When the search comes up empty the user fills
+            // the dialog above. When the search comes up empty the user fills
             // the password once by hand; it is cached locally + in the
             // app-owned keychain so this never comes up again.
             if !ssid.hasPrefix("-"), let stored = AdminAuth.storedPassword() {
@@ -816,15 +823,15 @@ struct PlaySettings: Codable {
                     return
                 }
                 let result = await Task.detached { () -> (Int32, String?) in
-                    // Confirmed on this machine: AirPort items are stored as
-                    // svce="AirPort" + acct=<SSID>, and the CURRENT network's
-                    // entry lives in the SYSTEM keychain (old ones also pile
-                    // up in the login keychain). Search both as root — the
-                    // canonical silent Wi-Fi-password dump.
-                    AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w",
-                                             "-s","AirPort","-a",ssid,
-                                             NSHomeDirectory() + "/Library/Keychains/login.keychain-db",
-                                             "/Library/Keychains/System.keychain"], password: stored)
+                    // Current network's AirPort entry lives in the SYSTEM
+                    // keychain (old ones also pile up in the login keychain).
+                    // Unlock System first (silent, no-op when already
+                    // unlocked), then search both keychains as root.
+                    guard AdminAuth.unlockSystemKeychain(password: stored) else { return (-2, nil) }
+                    return AdminAuth.runSudoOutput(["/usr/bin/security","find-generic-password","-w",
+                                                    "-s","AirPort","-a",ssid,
+                                                    NSHomeDirectory() + "/Library/Keychains/login.keychain-db",
+                                                    "/Library/Keychains/System.keychain"], password: stored)
                 }.value
                 guard settings.ssid == ssid else { readingPassword=false; passwordStatus="网络已切换，请重新读取密码。"; return }
                 readingPassword=false
@@ -834,6 +841,12 @@ struct PlaySettings: Codable {
                     writeAppOwnedWifiPassword(ssid: ssid, password: password)
                     persistPreferences()
                     passwordStatus="已通过管理员授权静默读取并记住密码，之后无需再授权。"
+                } else if result.0 == -2 {
+                    // sudo verified the password, yet unlock failed → the
+                    // System keychain has a custom password (differs from the
+                    // admin password). Nothing we can script; manually filled
+                    // and previously cached passwords still work.
+                    passwordStatus="System钥匙串设置了独立密码（与管理员密码不同），无法静默解锁；请手动填写一次，NIO Play将永久记住。"
                 } else if result.0 == 44 {
                     passwordStatus="钥匙串中没有该网络密码（新版macOS已不把Wi-Fi密码存入钥匙串）。请手动填写一次，NIO Play将永久记住。"
                 } else {
